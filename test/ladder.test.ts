@@ -158,6 +158,33 @@ describe('драбина', () => {
     expect(second.ok).toBe(true);
   });
 
+  it('мертва модель пропускається, хоч її пул живий', async () => {
+    // Точний зліпок 2026-09-13: у пулі `gemini-lite` частина моделей віддавала
+    // 5xx, частина — 200, одночасно. Драбина мусить оминути мертву СХОДИНКУ,
+    // не викреслюючи її пул.
+    //
+    // (Фікстура тут триступенева навмисно: інваріант реєстру не дав би
+    // покласти дві сходинки одного пулу поруч — що він і зробив, коли перша
+    // версія цього тесту спробувала.)
+    const { gw, seen } = gatewayOf({
+      a1: [{ outcome: 'exhausted', httpStatus: 429 }],
+      b1: [{ outcome: 'error', httpStatus: 503 }],
+      c1: [{ outcome: 'ok', content: 'третя' }],
+    });
+    const { ladder, pools } = build(gw, 0);
+    const first = await ladder.run(catalog, req);
+    expect(first.content).toBe('третя');
+    expect(pools.usable('cold')).toBe(true);      // пул живий…
+    expect(pools.modelUsable('b1')).toBe(false);  // …а модель у ящику
+
+    seen.length = 0;
+    const second = await ladder.run(catalog, req);
+    expect(seen).toEqual(['c1']);
+    expect(second.attempts[0]!.detail).toContain('пул відомо вичерпаний');
+    expect(second.attempts[1]!.detail).toContain('штрафному ящику');
+    expect(second.ok).toBe(true);
+  });
+
   it('невідомий тир — помилка з переліком відомих', async () => {
     const { gw } = gatewayOf({});
     const { ladder } = build(gw);

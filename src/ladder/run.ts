@@ -82,6 +82,14 @@ export function createLadder(config: LadderConfig) {
         attempts.push(skipped(rung, model, 'пул відомо вичерпаний'));
         continue;
       }
+      // Окремо від пулу: модель буває мертвою сама по собі, поки сусіди по
+      // пулу відповідають (`auth_unavailable`, «No capacity available for
+      // model …», 400 на форму). Без цієї перевірки драбина платила б повним
+      // таймаутом за сходинку, про яку вже все знає.
+      if (!config.pools.modelUsable(model.id)) {
+        attempts.push(skipped(rung, model, 'модель у штрафному ящику'));
+        continue;
+      }
 
       const { attempt, content } = await tryRung(rung, model, req);
       attempts.push(attempt);
@@ -135,6 +143,7 @@ export function createLadder(config: LadderConfig) {
       latency += res.latencyMs;
 
       config.pools.observe(model.pool, res.outcome, res.retryAfterMs);
+      config.pools.observeModel(model.id, res.outcome, res.httpStatus);
 
       const base: Attempt = {
         rung, model: model.id, pool: model.pool,
