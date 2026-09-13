@@ -51,10 +51,12 @@ COPY --from=build /app/dist ./dist
 # Міграції їдуть у той самий образ, що й код: схема завжди та сама, що й той,
 # хто її читає.
 COPY db ./db
-# Реєстр за замовчуванням. У проді поверх нього монтується
-# /srv/products/exo-ai/catalog.yaml :ro, щоб правка моделі чи пулу не
-# вимагала релізу; без монту образ лишається самодостатнім.
-COPY catalog.yaml ./catalog.yaml
+# Реєстр за замовчуванням — у теці, а не файлом у корені: у проді поверх неї
+# монтується /srv/products/exo-ai/config :ro. Саме ТЕКА, бо bind-монт одного
+# файла прив'язує контейнер до inode, і правка через rename (sed -i, vim, mv)
+# до нього вже ніколи не доїде — мовчки. Без монту образ лишається
+# самодостатнім.
+COPY catalog.yaml ./config/catalog.yaml
 
 ARG APP_VERSION=dev
 ENV APP_VERSION=$APP_VERSION

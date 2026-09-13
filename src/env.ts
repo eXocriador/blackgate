@@ -13,7 +13,7 @@ export const schema = {
   GATEWAY_API_KEY: str({ describe: 'ключ до VibeConduit', secret: true, min: 8 }),
 
   // Реєстр моделей. Монтується з теки продукту :ro, тож правиться без релізу.
-  CATALOG_PATH: str({ default: '/app/catalog.yaml' }),
+  CATALOG_PATH: str({ default: '/app/config/catalog.yaml' }),
   CATALOG_WATCH_MS: num({ default: 15_000, min: 0 }),
 
   // Ключі продуктів: "<продукт>:<секрет>", через кому. Ключ на продукт — те,
