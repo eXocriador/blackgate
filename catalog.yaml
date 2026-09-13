@@ -1,0 +1,129 @@
+# exo-ai — реєстр моделей. ДАНІ, не код: додати модель, пул чи сходинку драбини
+# не має вимагати релізу. Файл монтується в контейнер :ro з теки продукту
+# (/srv/products/exo-ai/catalog.yaml) і перечитується на льоту — див. src/catalog.
+#
+# ── Що таке пул ──────────────────────────────────────────────────────────────
+# Пул — це те, що ВИЧЕРПУЄТЬСЯ РАЗОМ. Не сімейство назв, не версія, не провайдер.
+# Розкладка нижче знята живою пробою 2026-09-13, а не вгадана з імен, і проба
+# спростувала очевидне: `gemini-3.1-pro-low` тоді віддавав 429, а
+# `gemini-3.1-flash-lite` — 200. Один префікс версії, різні пули. Якби пул
+# вважався за префіксом, драбина «3.1-pro → 3.1-flash-lite» здавалась би
+# однопуловою і була б відхилена дарма, а «3.6-flash → 3.8-flash» — різнопуловою
+# і пройшла б, хоч обидві лежать в одному метрі. Саме це й сталося в проді.
+#
+# ── Правило, якщо сумніваєшся ────────────────────────────────────────────────
+# ЗЛИВАЙ, не розділяй. Помилково зліплені два незалежні пули лише зайво
+# звужують драбину (сервіс вимагатиме переходу далі, ніж треба). Помилково
+# розділений один пул — це рівно сьогоднішній дефект: драбина «перетинає пули»
+# на папері й гине цілком на практиці.
+version: 1
+
+pools:
+  # Метр Antigravity на «преміальні» Gemini. Станом на 2026-09-13 весь цей пул
+  # у 429 RESOURCE_EXHAUSTED — усі десять id одночасно, що й доводить спільний
+  # метр. Сюди входять і pro, і flash: різниця тиру не робить різного метра.
+  gemini-premium:
+    upstream: antigravity
+    # Проба пулу. НЕ найдорожча і НЕ виведена з експлуатації модель — див. нижче
+    # про `retired`. Найдешевша жива з членів пулу.
+    probe: gemini-3.6-flash-low
+
+  # Метр Antigravity на «lite»-Gemini і tab-моделі. Відповідав 200 у той самий
+  # момент, коли gemini-premium лежав цілком.
+  #
+  # Чому ВСІ вони в одному пулі, хоч доказу спільного метра немає: доказ
+  # неможливий, поки жоден із них не вичерпаний — вичерпання і є тим, що
+  # показує межу. За правилом «зливай, не розділяй» вони разом, доки перший
+  # 429 не покаже, що котрийсь живе окремо. Тоді цей файл і правиться — без
+  # релізу, в цьому й сенс.
+  gemini-lite:
+    upstream: antigravity
+    probe: gemini-2.5-flash-lite
+
+  # Anthropic через Vertex — інший провайдер, інші рахунки, інший метр.
+  anthropic-vertex:
+    upstream: vertex
+    probe: claude-sonnet-4-6
+
+  gpt-oss:
+    upstream: gpt-oss
+    probe: gpt-oss-120b-medium
+
+models:
+  # ── gemini-premium ─────────────────────────────────────────────────────────
+  - { id: gemini-3-flash-preview,  pool: gemini-premium, timeout_ms: 30000 }
+  - { id: gemini-pro-agent,        pool: gemini-premium, timeout_ms: 60000 }
+  - { id: gemini-3.1-pro-low,      pool: gemini-premium, timeout_ms: 60000 }
+  - { id: gemini-3.6-flash-low,    pool: gemini-premium, timeout_ms: 30000 }
+  - { id: gemini-3.6-flash-medium, pool: gemini-premium, timeout_ms: 45000 }
+  - { id: gemini-3.6-flash-high,   pool: gemini-premium, timeout_ms: 60000 }
+  - { id: gemini-3.6-flash-tiered, pool: gemini-premium, timeout_ms: 45000 }
+  - { id: gemini-3.7-flash-tiered, pool: gemini-premium, timeout_ms: 45000 }
+  - { id: gemini-3.8-flash-tiered, pool: gemini-premium, timeout_ms: 45000 }
+
+  # Шлюз оголошує її в /v1/models і приймає запит, але відповідає 400
+  # INVALID_ARGUMENT на будь-яку форму тіла — це задокументовано в
+  # exointel/lib/ai/models.ts, і саме через неї SMART мовчав у проді.
+  # 2026-09-13 перевірено ще раз: зараз вона віддає 429, бо весь пул у 429,
+  # тобто 400 просто НЕ ВИДНО, поки квота лежить. Позначка лишається:
+  # `rejects_shape` — це властивість моделі, а 429 — властивість пулу, і одне
+  # не скасовує другого.
+  - id: gemini-3.1-pro-high
+    pool: gemini-premium
+    timeout_ms: 60000
+    rejects_shape: true
+    note: "400 INVALID_ARGUMENT на будь-яку форму тіла (exointel, 2026-09); під 429 пулу не спостерігається"
+
+  # ── gemini-premium, виведені з експлуатації апстрімом ──────────────────────
+  # Найкоштовніша знахідка розвідки 2026-09-13: ЦІ ТРИ ВІДДАЮТЬ HTTP 200.
+  # Не 404, не 400 — 200, з тілом, у якому `model: "model"`, `usage: null` і
+  # текстом «Gemini 3.5 Flash is no longer available…» замість відповіді.
+  # Монітор, що дивиться на код статусу, назве такий пул здоровим; продукт,
+  # що читає choices[0].message.content, покаже цей текст користувачеві як
+  # відповідь моделі. Тому вони позначені `retired`, сервіс відмовляється
+  # ставити їх у драбину чи в пробу пулу, а детектор підробленого 200
+  # (src/upstream/gateway.ts) ловить те саме на льоту для ще не позначених.
+  - { id: gemini-3.5-flash-low,       pool: gemini-premium, retired: true, note: "200 з текстом-надгробком, usage null" }
+  - { id: gemini-3.5-flash-extra-low, pool: gemini-premium, retired: true, note: "200 з текстом-надгробком, usage null" }
+  - { id: gemini-3-flash-agent,       pool: gemini-premium, retired: true, note: "200 з текстом-надгробком, usage null" }
+
+  # ── gemini-lite ────────────────────────────────────────────────────────────
+  - { id: gemini-2.5-flash,        pool: gemini-lite, timeout_ms: 30000 }
+  - { id: gemini-2.5-flash-lite,   pool: gemini-lite, timeout_ms: 20000 }
+  - { id: gemini-3.1-flash-lite,   pool: gemini-lite, timeout_ms: 20000 }
+  - { id: gemini-3.5-flash-lite,   pool: gemini-lite, timeout_ms: 20000 }
+  - { id: gemini-3.1-flash-image,  pool: gemini-lite, timeout_ms: 45000 }
+  - { id: tab_flash_lite_preview,      pool: gemini-lite, timeout_ms: 20000 }
+  - { id: tab_jump_flash_lite_preview, pool: gemini-lite, timeout_ms: 20000 }
+
+  # ── anthropic-vertex ───────────────────────────────────────────────────────
+  - { id: claude-sonnet-4-6,        pool: anthropic-vertex, timeout_ms: 60000 }
+  - { id: claude-opus-4-6-thinking, pool: anthropic-vertex, timeout_ms: 120000 }
+
+  # ── gpt-oss ────────────────────────────────────────────────────────────────
+  # Помітно балакучіша на однакове питання: 117 total_tokens там, де gemini
+  # витратив 11 (жива проба 2026-09-13). Тому вона остання сходинка, а не перша.
+  - { id: gpt-oss-120b-medium, pool: gpt-oss, timeout_ms: 60000 }
+
+# ── Драбини ──────────────────────────────────────────────────────────────────
+# Продукт просить ТИР, а не модель. Id моделі — деталь сервісу, і рядок нижче
+# можна переставити, не торкаючись жодного продукту.
+#
+# Інваріант, який сервіс перевіряє на старті й відмовляється стартувати без
+# нього: СУСІДНІ сходинки лежать у РІЗНИХ пулах. Саме цього бракувало teamself,
+# де основна і запасна були обидві в gemini-premium.
+tiers:
+  fast:
+    - gemini-3-flash-preview   # gemini-premium
+    - gemini-2.5-flash         # gemini-lite
+    - gpt-oss-120b-medium      # gpt-oss
+
+  capable:
+    - gemini-3.1-pro-low       # gemini-premium
+    - claude-sonnet-4-6        # anthropic-vertex
+    - gemini-2.5-flash         # gemini-lite
+
+  agent:
+    - gemini-pro-agent         # gemini-premium
+    - claude-sonnet-4-6        # anthropic-vertex
+    - gemini-2.5-flash         # gemini-lite

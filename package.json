@@ -1,0 +1,27 @@
+{
+  "name": "exo-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "start": "node dist/index.js",
+    "catalog:check": "node dist/catalog/cli.js"
+  },
+  "dependencies": {
+    "@exo/kit": "github:eXocriador/exo-kit#v0.7.1",
+    "ioredis": "^5.4.1",
+    "pino": "^9.5.0",
+    "postgres": "^3.4.5",
+    "yaml": "^2.6.1",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
