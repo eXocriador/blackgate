@@ -12,7 +12,7 @@
     "catalog:check": "node dist/catalog/cli.js"
   },
   "dependencies": {
-    "@exo/kit": "github:eXocriador/exo-kit#v0.7.1",
+    "@exo/kit": "github:eXocriador/exo-kit#v0.9.2",
     "ioredis": "^5.4.1",
     "pino": "^9.5.0",
     "postgres": "^3.4.5",
