@@ -118,15 +118,17 @@ models:
 tiers:
   fast:
     - gemini-3-flash-preview   # gemini-premium
-    - gemini-2.5-flash         # gemini-lite
+    # 2026-09-13: gemini-2.5-flash віддає 500 auth_unavailable, а
+    # gemini-3.1-flash-lite того ж пулу — 200. Правка ДАНИХ, без релізу.
+    - gemini-3.1-flash-lite    # gemini-lite
     - gpt-oss-120b-medium      # gpt-oss
 
   capable:
     - gemini-3.1-pro-low       # gemini-premium
     - claude-sonnet-4-6        # anthropic-vertex
-    - gemini-2.5-flash         # gemini-lite
+    - gemini-3.1-flash-lite    # gemini-lite
 
   agent:
     - gemini-pro-agent         # gemini-premium
     - claude-sonnet-4-6        # anthropic-vertex
-    - gemini-2.5-flash         # gemini-lite
+    - gemini-3.1-flash-lite    # gemini-lite
