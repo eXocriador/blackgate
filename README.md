@@ -57,6 +57,10 @@ Authorization: Bearer <ключ продукту>
 `GET /v1/usage` (скільки цей продукт спалив сьогодні), `/health/live`,
 `/health/ready` (обидва без ключа).
 
+Клієнти: TypeScript — `@exo/kit/ai` у [exo-kit](https://github.com/eXocriador/exo-kit);
+Python — [`clients/python`](clients/python/README.md) у цьому репо (async `httpx`,
+типізовані помилки на кожен рядок таблиці вище).
+
 ## Реєстр моделей — дані, не код
 
 `catalog.yaml` монтується з теки продукту `:ro` і перечитується за mtime
