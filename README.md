@@ -131,3 +131,7 @@ npm ci && npm test && npm run typecheck
 йшли б від іншого `node_modules` і від некоміченого дерева.
 
 Деплой, БД, ключі і монітор — у `/srv/products/exo-ai/README.md`.
+
+## Ліцензія
+
+MIT — `LICENSE`.

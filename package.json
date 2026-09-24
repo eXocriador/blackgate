@@ -2,8 +2,11 @@
   "name": "exo-ai",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
