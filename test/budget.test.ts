@@ -36,11 +36,11 @@ const day = new Date('2026-09-13T23:59:00Z');
 
 describe('ключ лічильника', () => {
   it('день у UTC, не в локальному часі', () => {
-    expect(budgetKey('product', 'exointel', day)).toBe('exoai:product:exointel:20260913');
+    expect(budgetKey('product', 'exointel', day)).toBe('blackgate:product:exointel:20260913');
   });
   it('наступна доба UTC — інший ключ', () => {
     expect(budgetKey('product', 'exointel', new Date('2026-09-14T00:01:00Z')))
-      .toBe('exoai:product:exointel:20260914');
+      .toBe('blackgate:product:exointel:20260914');
   });
 });
 

@@ -1,4 +1,4 @@
-# exo-ai — один Node-процес. Контекст — корінь репо (git archive HEAD, §3).
+# blackgate — один Node-процес. Контекст — корінь репо (git archive HEAD, §3).
 # Стандарт §5: node:22-bookworm-slim, multi-stage, npm ci, фінальний образ без
 # dev-залежностей, USER non-root.
 
@@ -32,7 +32,7 @@ WORKDIR /app
 # dbmate у ОБРАЗ ПРОДУКТУ — навмисно, і це перша така збірка в /srv.
 #
 # `exo-deploy` має вбудовану гілку `MIGRATE=dbmate`, яка запускає раннер САМЕ
-# образом продукту (`docker run … exo-ai-web dbmate …`). Досі гілка стояла
+# образом продукту (`docker run … blackgate-web dbmate …`). Досі гілка стояла
 # невикористаною: у netwatch і filebrowser dbmate в образі немає, а `.env`
 # зве рядок `POSTGRES_URL`, тоді як dbmate читає тільки `DATABASE_URL` — тож
 # обидва лишили власні migrate.sh з окремим контейнером `amacneil/dbmate`
@@ -52,7 +52,7 @@ COPY --from=build /app/dist ./dist
 # хто її читає.
 COPY db ./db
 # Реєстр за замовчуванням — у теці, а не файлом у корені: у проді поверх неї
-# монтується /srv/products/exo-ai/config :ro. Саме ТЕКА, бо bind-монт одного
+# монтується /srv/products/blackgate/config :ro. Саме ТЕКА, бо bind-монт одного
 # файла прив'язує контейнер до inode, і правка через rename (sed -i, vim, mv)
 # до нього вже ніколи не доїде — мовчки. Без монту образ лишається
 # самодостатнім.

@@ -1,8 +1,8 @@
 /**
- * exo-ai — шлюз до моделей: пули, драбина запасних ходів, облік.
+ * blackgate (до 2026-09-24 exo-ai) — шлюз до моделей: пули, драбина запасних ходів, облік.
  *
  * Стоїть ПЕРЕД VibeConduit, а не замість нього. Шлюз лишається виходом до
- * провайдерів (там автентифікація до Google і Vertex), exo-ai бере політику:
+ * провайдерів (там автентифікація до Google і Vertex), blackgate бере політику:
  * реєстр моделей, здоров'я пулів, драбину, ретраї, стелі, облік.
  */
 import { createDb, createRedis } from '@exo/kit/infra';
@@ -22,7 +22,7 @@ import { createHttpServer } from './http/server.js';
 async function main(): Promise<void> {
   const env = loadEnv();
   // `@exo/kit/log` уже віддає рівно ту пару, якої тут треба, — подія плюс поля.
-  const { logInfo, logWarn, logError } = createLogger({ service: 'exo-ai', level: env.LOG_LEVEL });
+  const { logInfo, logWarn, logError } = createLogger({ service: 'blackgate', level: env.LOG_LEVEL });
 
   const keys = parseProductKeys(env.PRODUCT_KEYS);
   logInfo('boot.keys', { products: keys.products });
@@ -154,11 +154,11 @@ main().catch((err) => {
   // Поганий реєстр і погані ключі друкуються списком проблем, а не одним
   // рядком: оператор має побачити все, що не так, за один запуск.
   if (err instanceof CatalogError) {
-    console.error(`exo-ai: реєстр непридатний — сервіс не стартує\n  - ${err.problems.join('\n  - ')}`);
+    console.error(`blackgate: реєстр непридатний — сервіс не стартує\n  - ${err.problems.join('\n  - ')}`);
   } else if (err instanceof KeyConfigError) {
-    console.error(`exo-ai: ${err.message}`);
+    console.error(`blackgate: ${err.message}`);
   } else {
-    console.error('exo-ai: старт не вдався', err);
+    console.error('blackgate: старт не вдався', err);
   }
   process.exit(1);
 });

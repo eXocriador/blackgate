@@ -40,10 +40,14 @@ export interface BudgetVerdict {
   cap: number;
 }
 
-/** Ключ із датою UTC. Форма навмисно та сама, що була, лише в своєму просторі імен. */
+/**
+ * Ключ із датою UTC. Форма навмисно та сама, що була, лише в своєму просторі імен.
+ * До 2026-09-24 простір звався `exoai:`; лічильники того дня перейменовано
+ * `RENAME` на перемиканні, щоб денні стелі не скинулись посеред доби.
+ */
 export function budgetKey(scope: BudgetScope, id: string, now: Date = new Date()): string {
   const day = now.toISOString().slice(0, 10).replace(/-/g, '');
-  return `exoai:${scope}:${id}:${day}`;
+  return `blackgate:${scope}:${id}:${day}`;
 }
 
 export interface BudgetConfig {
