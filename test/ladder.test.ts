@@ -29,7 +29,7 @@ function gatewayOf(plan: Record<string, Partial<CallResult>[]>): { gw: Gateway; 
       cursor[req.model] = (cursor[req.model] ?? 0) + 1;
       return {
         outcome: 'ok', content: null, httpStatus: 200, latencyMs: 1,
-        retryAfterMs: null, error: null,
+        retryAfterMs: null, error: null, unreachable: false,
         usage: { promptTokens: null, completionTokens: null, totalTokens: null },
         ...steps[i],
       } as CallResult;
@@ -210,6 +210,7 @@ describe('драбина', () => {
         return {
           outcome: 'ok', content: `відповідь ${who}`, httpStatus: 200, latencyMs: 1,
           retryAfterMs: null, error: null,
+          unreachable: false,
           usage: { promptTokens: null, completionTokens: null, totalTokens: null },
         };
       },

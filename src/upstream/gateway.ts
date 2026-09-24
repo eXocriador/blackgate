@@ -44,12 +44,24 @@ export interface CallResult {
   /** Скільки чекати перед наступною спробою, якщо апстрім сказав. */
   retryAfterMs: number | null;
   error: string | null;
+  /**
+   * До шлюзу не дійшли взагалі: відмова з'єднання, DNS, скидання. Властивість
+   * ШЛЮЗУ, спільна для всіх моделей і пулів, — на відміну від таймауту, який
+   * каже лише, що ця модель не встигла (див. `call`).
+   */
+  unreachable: boolean;
 }
 
 export interface GatewayConfig {
   baseUrl: string;
   apiKey: string;
   fetchImpl?: typeof fetch;
+  /**
+   * Кожна відповідь шлюзу — і драбини, і проби пулів. Сюди дивиться стан входу
+   * апстріму (`./login.ts`): це єдині двері назовні, тож свідок на них бачить
+   * усе, хоч би хто стукав.
+   */
+  onResult?: (req: CallRequest, res: CallResult) => void;
 }
 
 export interface CallRequest {
@@ -96,6 +108,12 @@ export function createGateway(config: GatewayConfig) {
   const base = config.baseUrl.replace(/\/+$/, '');
 
   async function call(req: CallRequest): Promise<CallResult> {
+    const res = await send(req);
+    config.onResult?.(req, res);
+    return res;
+  }
+
+  async function send(req: CallRequest): Promise<CallResult> {
     const started = Date.now();
     const blank: Usage = { promptTokens: null, completionTokens: null, totalTokens: null };
 
@@ -119,7 +137,17 @@ export function createGateway(config: GatewayConfig) {
         signal: AbortSignal.timeout(req.timeoutMs),
       });
     } catch (err) {
-      const timedOut = (err as Error)?.name === 'TimeoutError' || (err as Error)?.name === 'AbortError';
+      /**
+       * Таймаут і недосяжний шлюз — різні речі, хоч коду статусу немає в обох.
+       *
+       * Доти обидва йшли з `httpStatus: null`, і проба пулу читала це як
+       * «шлюз недосяжний». 2026-09-23 14:35Z проба `gemini-premium` не
+       * встигла за 15 с — і весь пул став `down`, хоч шлюз відповідав іншим
+       * пулам у ту саму хвилину. Таймаут — це `AbortSignal.timeout` моделі:
+       * з'єднання було, не було відповіді. Недосяжний — коли з'єднання не
+       * вийшло або обірвалось: це вже шлюз, і він спільний для всіх.
+       */
+      const timedOut = isTimeout(err);
       return {
         outcome: timedOut ? 'timeout' : 'error',
         content: null,
@@ -127,7 +155,8 @@ export function createGateway(config: GatewayConfig) {
         httpStatus: null,
         latencyMs: Date.now() - started,
         retryAfterMs: null,
-        error: (err as Error)?.message ?? String(err),
+        error: describe(err),
+        unreachable: !timedOut,
       };
     }
 
@@ -144,6 +173,7 @@ export function createGateway(config: GatewayConfig) {
         latencyMs,
         retryAfterMs,
         error: text.slice(0, 500) || null,
+        unreachable: false,
       };
     }
 
@@ -151,9 +181,17 @@ export function createGateway(config: GatewayConfig) {
     try {
       body = await res.json();
     } catch (err) {
+      // Таймаут моделі спрацьовує й посеред тіла: заголовки прийшли, відповідь
+      // ні. Це та сама повільна модель, а не зіпсоване тіло.
+      if (isTimeout(err)) {
+        return {
+          outcome: 'timeout', content: null, usage: blank, httpStatus: res.status,
+          latencyMs: Date.now() - started, retryAfterMs, error: describe(err), unreachable: false,
+        };
+      }
       return {
         outcome: 'error', content: null, usage: blank, httpStatus: res.status,
-        latencyMs, retryAfterMs, error: `тіло не JSON: ${(err as Error).message}`,
+        latencyMs, retryAfterMs, error: `тіло не JSON: ${(err as Error).message}`, unreachable: false,
       };
     }
 
@@ -166,6 +204,7 @@ export function createGateway(config: GatewayConfig) {
         latencyMs,
         retryAfterMs,
         error: `підроблений 200: ${String(readContent(body)).slice(0, 200)}`,
+        unreachable: false,
       };
     }
 
@@ -178,6 +217,7 @@ export function createGateway(config: GatewayConfig) {
       latencyMs,
       retryAfterMs,
       error: null,
+      unreachable: false,
     };
   }
 
@@ -199,6 +239,24 @@ export function createGateway(config: GatewayConfig) {
 }
 
 export type Gateway = ReturnType<typeof createGateway>;
+
+function isTimeout(err: unknown): boolean {
+  const name = (err as Error)?.name;
+  return name === 'TimeoutError' || name === 'AbortError';
+}
+
+/**
+ * `fetch failed` сам нічого не каже — причина лежить у `cause` undici
+ * (`ECONNREFUSED`, `ENOTFOUND`, `ECONNRESET`, `UND_ERR_SOCKET`…), і саме вона
+ * потрібна тому, хто читає `detail` у `ai_call` чи в стані пулу.
+ */
+function describe(err: unknown): string {
+  const e = err as Error & { cause?: { code?: unknown; message?: unknown } };
+  const message = e?.message ?? String(err);
+  const code = e?.cause?.code;
+  const cause = typeof code === 'string' ? code : typeof e?.cause?.message === 'string' ? e.cause.message : null;
+  return cause && !message.includes(cause) ? `${message} (${cause})` : message;
+}
 
 function classifyStatus(status: number): Outcome {
   if (status === 429) return 'exhausted';

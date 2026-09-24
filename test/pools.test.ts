@@ -20,6 +20,7 @@ function gatewayOf(byModel: Record<string, Partial<CallResult>>): Gateway {
     async call(req) {
       return {
         outcome: 'ok', content: 'x', httpStatus: 200, latencyMs: 5, retryAfterMs: null, error: null,
+        unreachable: false,
         usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
         ...(byModel[req.model] ?? {}),
       } as CallResult;
@@ -111,14 +112,44 @@ describe('здоров\'я пулів', () => {
     expect(h.modelUsable('a1')).toBe(false);
   });
 
-  it('недосяжний шлюз (без коду статусу) — це вже down', async () => {
+  it('недосяжний шлюз (відмова з\'єднання) — це вже down', async () => {
     const h = createPoolHealth({
-      gateway: gatewayOf({ a1: { outcome: 'error', httpStatus: null, content: null } }),
+      gateway: gatewayOf({ a1: { outcome: 'error', httpStatus: null, content: null, unreachable: true, error: 'fetch failed (ECONNREFUSED)' } }),
       catalog: () => catalog,
     });
     await h.sweep();
-    expect(h.snapshot().find((p) => p.pool === 'hot')!.state).toBe('down');
+    const hot = h.snapshot().find((p) => p.pool === 'hot')!;
+    expect(hot.state).toBe('down');
+    expect(hot.detail).toContain('ECONNREFUSED');
     expect(h.usable('hot')).toBe(false);
+    // Шлюз — не провина моделі: після його повернення сходинка має бути доступна.
+    expect(h.modelUsable('a1')).toBe(true);
+  });
+
+  /**
+   * 2026-09-23 14:35Z: проба `gemini-premium` не встигла за 15 с — і весь пул
+   * став `down` з «шлюз недосяжний: timeout», хоч три інші пули в ту саму
+   * хвилину відповідали через той самий шлюз.
+   */
+  it('таймаут проби — стан МОДЕЛІ: пул живий, модель у штрафному ящику', async () => {
+    const h = createPoolHealth({
+      gateway: gatewayOf({ a1: { outcome: 'timeout', httpStatus: null, content: null, latencyMs: 15_000 } }),
+      catalog: () => catalog,
+    });
+    await h.sweep();
+    const hot = h.snapshot().find((p) => p.pool === 'hot')!;
+    expect(hot.state).toBe('unknown');
+    expect(hot.detail).toContain('не відповіла за 15000 мс');
+    expect(h.usable('hot')).toBe(true);
+    expect(h.modelUsable('a1')).toBe(false);
+  });
+
+  it('недосяжний шлюз у живому запиті не карає модель', () => {
+    const h = createPoolHealth({ gateway: gatewayOf({}), catalog: () => catalog });
+    h.observeModel('a1', 'error', null);
+    expect(h.modelUsable('a1')).toBe(true);
+    h.observeModel('a1', 'timeout', null);
+    expect(h.modelUsable('a1')).toBe(false);
   });
 
   it('штрафний ящик відпускає модель після охолодження, і успіх знімає штраф', () => {

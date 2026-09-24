@@ -133,8 +133,18 @@ export function createPoolHealth(config: PoolHealthConfig) {
       modelPenalty.delete(model);
       return;
     }
-    // 429 — це пул, не модель; сюди він не потрапляє.
-    if (outcome === 'error' || outcome === 'unauthorized' || outcome === 'rejected' || outcome === 'retired') {
+    // Недосяжний шлюз (`error` без коду статусу — таймаут тепер окремий
+    // `timeout`) — провина не моделі. Покарати за нього модель означало б, що
+    // після повернення шлюзу драбина ще десять хвилин пропускала б усі
+    // сходинки, які встигла спробувати, поки він лежав.
+    if (outcome === 'error' && httpStatus === null) return;
+    // 429 — це пул, не модель; сюди він не потрапляє. Таймаут — модель: вона
+    // не встигла, а шлюз відповідав; без ящика драбина платила б повним
+    // таймаутом за ту саму повільну сходинку на кожному запиті.
+    if (
+      outcome === 'error' || outcome === 'timeout' || outcome === 'unauthorized' ||
+      outcome === 'rejected' || outcome === 'retired'
+    ) {
       modelPenalty.set(model, {
         until: now() + cooldownMs,
         why: `${outcome}${httpStatus ? ` (${httpStatus})` : ''}`,
@@ -204,17 +214,24 @@ export function createPoolHealth(config: PoolHealthConfig) {
          * драбина далі його пробує. Мертвою при цьому вважається сама модель
          * — це записує `observeModel` нижче.
          *
-         * Недосяжний шлюз (httpStatus === null) — інша річ: він спільний для
-         * всіх пулів, і тоді `down` чесний.
+         * Недосяжний шлюз — інша річ: він спільний для всіх пулів, і тоді
+         * `down` чесний. Але лише справді недосяжний (відмова з'єднання, DNS,
+         * скидання — `res.unreachable`), а не «без коду статусу»: таймаут
+         * коду теж не має. 2026-09-23 14:35Z проба `gemini-premium` не
+         * встигла за 15 с, і весь пул став `down` з «шлюз недосяжний:
+         * timeout», хоч шлюз у ту саму хвилину відповідав трьом іншим пулам.
+         * Повільна модель — штраф моделі, як і 5xx.
          */
-        if (res.httpStatus === null) {
+        if (res.unreachable) {
           e.state = 'down';
           e.cooldownUntil = now() + cooldownMs;
-          e.detail = `шлюз недосяжний: ${res.outcome}`;
+          e.detail = `шлюз недосяжний: ${res.error ?? res.outcome}`;
         } else {
           e.state = 'unknown';
           e.cooldownUntil = null;
-          e.detail = `проба "${model.id}" віддала ${res.httpStatus} — це стан моделі, не пулу`;
+          e.detail = res.outcome === 'timeout'
+            ? `проба "${model.id}" не відповіла за ${res.latencyMs} мс — це стан моделі, не пулу`
+            : `проба "${model.id}" віддала ${res.httpStatus} — це стан моделі, не пулу`;
           observeModel(model.id, res.outcome, res.httpStatus);
         }
         break;

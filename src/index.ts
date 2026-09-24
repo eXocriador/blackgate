@@ -11,6 +11,7 @@ import { createLogger } from '@exo/kit/log';
 import { loadEnv } from './env.js';
 import { loadCatalog, CatalogError } from './catalog/index.js';
 import { createGateway } from './upstream/gateway.js';
+import { createUpstreamHealth, withUpstream } from './upstream/login.js';
 import { createPoolHealth } from './pools/health.js';
 import { createLadder } from './ladder/run.js';
 import { createBudget } from './accounting/budget.js';
@@ -59,7 +60,19 @@ async function main(): Promise<void> {
     reportError: (err, ctx) => logError('redis.error', err, { ...ctx }),
   });
 
-  const gateway = createGateway({ baseUrl: env.GATEWAY_URL, apiKey: env.GATEWAY_API_KEY });
+  // Вхід апстріму бачить кожну відповідь шлюзу — і драбини, і проб. Вікно —
+  // три обходи пулів: при справжній відмові свіжі докази приходять щообходу.
+  const upstream = createUpstreamHealth({
+    catalog: () => catalog.current(),
+    windowMs: Math.max(3 * env.POOL_PROBE_INTERVAL_MS, 15 * 60_000),
+    logInfo,
+    logWarn,
+  });
+  const gateway = createGateway({
+    baseUrl: env.GATEWAY_URL,
+    apiKey: env.GATEWAY_API_KEY,
+    onResult: (req, res) => upstream.observe(req.model, res),
+  });
 
   const pools = createPoolHealth({
     gateway,
@@ -74,7 +87,7 @@ async function main(): Promise<void> {
   const budget = createBudget({ redis, logWarn });
   const ledger = createLedger({ db, catalog: () => catalog.current(), logWarn });
 
-  const health = createHealth({
+  const infra = createHealth({
     version: env.APP_VERSION,
     checks: {
       // Реєстр у пам'яті — те, без чого сервіс не може ухвалити жодного
@@ -107,6 +120,8 @@ async function main(): Promise<void> {
     required: ['catalog', 'pools'],
     reportError: (err, ctx) => logError('health.error', err, { ...ctx }),
   });
+  // `checks.upstream`: протухлий вхід до Google — 503, хоч пули й «придатні».
+  const health = withUpstream(infra, upstream);
 
   const server = createHttpServer({
     keys, catalog, pools, ladder, budget, ledger, health,
