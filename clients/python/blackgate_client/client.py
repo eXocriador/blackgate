@@ -1,4 +1,4 @@
-"""Асинхронний клієнт ``POST /v1/complete`` і довідкових маршрутів exo-ai.
+"""Асинхронний клієнт ``POST /v1/complete`` і довідкових маршрутів blackgate.
 
 Тонкий навмисно: драбина, пули, стелі й облік живуть у сервісі, а клієнт лише
 перекладає HTTP на типи Python — щоб продукт розрізняв «передай людині» (429),
@@ -15,13 +15,13 @@ from typing import Any, Literal, Self
 
 import httpx
 
-from exo_ai_client.errors import (
+from blackgate_client.errors import (
     AllRungsFailed,
     BadRequest,
+    BlackgateError,
+    BlackgateTimeout,
+    BlackgateUnavailable,
     BudgetExhausted,
-    ExoAIError,
-    ExoAITimeout,
-    ExoAIUnavailable,
     Unauthorized,
     UnexpectedResponse,
     UnknownTier,
@@ -107,12 +107,12 @@ class Completion:
         return self.answered.completion_tokens if self.answered else None
 
 
-class ExoAI:
-    """Клієнт exo-ai.
+class Blackgate:
+    """Клієнт blackgate.
 
     Приклад::
 
-        async with ExoAI("http://exo-ai-web:3000", key) as ai:
+        async with Blackgate("http://blackgate-web:3000", key) as ai:
             done = await ai.complete(
                 "fast", [Message("user", "…")], subject="exopost:bot:moderator"
             )
@@ -131,7 +131,7 @@ class ExoAI:
         client: httpx.AsyncClient | None = None,
     ) -> None:
         if not api_key:
-            raise ValueError("exo-ai: порожній ключ продукту")
+            raise ValueError("blackgate: порожній ключ продукту")
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._headers = {"Authorization": f"Bearer {api_key}"}
@@ -176,7 +176,7 @@ class ExoAI:
             AllRungsFailed: 503 — жодна сходинка не відповіла.
             UnknownTier, BadRequest: 400 — помилка інтеграції.
             Unauthorized: 401.
-            ExoAITimeout, ExoAIUnavailable: до сервісу не дійшли.
+            BlackgateTimeout, BlackgateUnavailable: до сервісу не дійшли.
             UnexpectedResponse: усе, чого контракт не описує.
         """
         payload: dict[str, Any] = {
@@ -205,7 +205,7 @@ class ExoAI:
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise UnexpectedResponse(
-                f"exo-ai: 200 без полів відповіді ({exc})", status=200, body=body
+                f"blackgate: 200 без полів відповіді ({exc})", status=200, body=body
             ) from exc
 
     async def pools(self) -> list[dict[str, Any]]:
@@ -237,9 +237,11 @@ class ExoAI:
                 timeout=timeout if timeout is not None else self.timeout,
             )
         except httpx.TimeoutException as exc:
-            raise ExoAITimeout(f"exo-ai: таймаут {method} {path}") from exc
+            raise BlackgateTimeout(f"blackgate: таймаут {method} {path}") from exc
         except httpx.TransportError as exc:
-            raise ExoAIUnavailable(f"exo-ai: недосяжний ({type(exc).__name__}: {exc})") from exc
+            raise BlackgateUnavailable(
+                f"blackgate: недосяжний ({type(exc).__name__}: {exc})"
+            ) from exc
 
         body = _body(response)
         if response.status_code == 200 and isinstance(body, dict):
@@ -247,7 +249,7 @@ class ExoAI:
         raise _error_for(response.status_code, body)
 
 
-def _error_for(status: int, body: Any) -> ExoAIError:
+def _error_for(status: int, body: Any) -> BlackgateError:
     fields = body if isinstance(body, dict) else {}
     code = fields.get("error")
     detail = fields.get("detail")
@@ -255,21 +257,21 @@ def _error_for(status: int, body: Any) -> ExoAIError:
 
     if status == 429 and code == "budget_exhausted":
         return BudgetExhausted(
-            f"exo-ai: стеля {fields.get('scope')} {fields.get('used')}/{fields.get('cap')}",
+            f"blackgate: стеля {fields.get('scope')} {fields.get('used')}/{fields.get('cap')}",
             body=fields,
         )
     if status == 503 and code == "all_rungs_failed":
         return AllRungsFailed(
-            f"exo-ai: тир {fields.get('tier')!r} — жодна сходинка не відповіла", body=fields
+            f"blackgate: тир {fields.get('tier')!r} — жодна сходинка не відповіла", body=fields
         )
     if status == 400 and code == "unknown_tier":
-        return UnknownTier(f"exo-ai: невідомий тир{suffix}", body=fields)
+        return UnknownTier(f"blackgate: невідомий тир{suffix}", body=fields)
     if status == 400:
-        return BadRequest(f"exo-ai: запит не тієї форми{suffix}", body=body)
+        return BadRequest(f"blackgate: запит не тієї форми{suffix}", body=body)
     if status == 401:
-        return Unauthorized("exo-ai: ключ продукту не прийнято", body=body)
+        return Unauthorized("blackgate: ключ продукту не прийнято", body=body)
     return UnexpectedResponse(
-        f"exo-ai: {status} {code or ''}{suffix}".rstrip(), status=status, body=body
+        f"blackgate: {status} {code or ''}{suffix}".rstrip(), status=status, body=body
     )
 
 

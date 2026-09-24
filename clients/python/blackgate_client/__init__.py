@@ -1,19 +1,19 @@
-"""Python-клієнт exo-ai — шлюзу до моделей. Контракт — README сервісу."""
+"""Python-клієнт blackgate — шлюзу до моделей. Контракт — README сервісу."""
 
-from exo_ai_client.client import (
+from blackgate_client.client import (
     DEFAULT_TIMEOUT_SECONDS,
     Attempt,
+    Blackgate,
     Completion,
-    ExoAI,
     Message,
 )
-from exo_ai_client.errors import (
+from blackgate_client.errors import (
     AllRungsFailed,
     BadRequest,
+    BlackgateError,
+    BlackgateTimeout,
+    BlackgateUnavailable,
     BudgetExhausted,
-    ExoAIError,
-    ExoAITimeout,
-    ExoAIUnavailable,
     Unauthorized,
     UnexpectedResponse,
     UnknownTier,
@@ -24,12 +24,12 @@ __all__ = [
     "AllRungsFailed",
     "Attempt",
     "BadRequest",
+    "Blackgate",
+    "BlackgateError",
+    "BlackgateTimeout",
+    "BlackgateUnavailable",
     "BudgetExhausted",
     "Completion",
-    "ExoAI",
-    "ExoAIError",
-    "ExoAITimeout",
-    "ExoAIUnavailable",
     "Message",
     "Unauthorized",
     "UnexpectedResponse",

@@ -1,23 +1,23 @@
-# exo-ai-client (Python)
+# blackgate-client (Python)
 
-Асинхронний клієнт [exo-ai](../../README.md) на `httpx`. Один на портфель:
+Асинхронний клієнт [blackgate](../../README.md) на `httpx`. Один на портфель:
 продукти на Python ставлять його звідси, а не пишуть власний.
 
 ```toml
 # pyproject.toml продукту (uv)
-dependencies = ["exo-ai-client"]
+dependencies = ["blackgate-client"]
 
 [tool.uv.sources]
-exo-ai-client = { git = "https://github.com/eXocriador/exo-ai", subdirectory = "clients/python", rev = "<коміт>" }
+blackgate-client = { git = "https://github.com/eXocriador/blackgate", subdirectory = "clients/python", rev = "<коміт>" }
 ```
 
-Лок запам'ятовує коміт, тож образ продукту не зміниться сам від пушу в exo-ai.
+Лок запам'ятовує коміт, тож образ продукту не зміниться сам від пушу в blackgate.
 Оновити — змінити `rev` і `uv lock`.
 
 ```python
-from exo_ai_client import BudgetExhausted, AllRungsFailed, ExoAI, Message
+from blackgate_client import BudgetExhausted, AllRungsFailed, Blackgate, Message
 
-async with ExoAI("http://exo-ai-web:3000", key) as ai:
+async with Blackgate("http://blackgate-web:3000", key) as ai:
     try:
         done = await ai.complete(
             "fast",
@@ -44,11 +44,11 @@ done.content, done.model, done.pool, done.rung, done.attempts
 | 400 `unknown_tier` | `UnknownTier` (`tiers`) | ні | помилка інтеграції |
 | 400 `bad_request` | `BadRequest` | ні | помилка інтеграції |
 | 401 | `Unauthorized` | ні | ключ продукту не той |
-| таймаут клієнта | `ExoAITimeout` | так | сервіс міг уже списати виклик зі стелі |
-| мережа | `ExoAIUnavailable` | так | |
+| таймаут клієнта | `BlackgateTimeout` | так | сервіс міг уже списати виклик зі стелі |
+| мережа | `BlackgateUnavailable` | так | |
 | решта (5xx, не-JSON) | `UnexpectedResponse` | так для 5xx | |
 
-Усі — нащадки `ExoAIError`. `subject` — гаманець кінцевого клієнта
+Усі — нащадки `BlackgateError`. `subject` — гаманець кінцевого клієнта
 (`<продукт>:<що>:<хто>`) для стелі на суб'єкта; без нього рахується лише стеля
 продукту. `max_tokens`/`temperature`, яких не передали, сервіс підставляє сам
 (512 і 0.3).

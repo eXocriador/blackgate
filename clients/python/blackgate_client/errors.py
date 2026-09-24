@@ -9,7 +9,7 @@
 * ``UnknownTier`` / ``BadRequest`` (400) — помилка інтеграції, повтор нічого не
   змінить;
 * ``Unauthorized`` (401) — ключ продукту не той;
-* ``ExoAITimeout`` / ``ExoAIUnavailable`` — до сервісу не дійшли або не дочекались.
+* ``BlackgateTimeout`` / ``BlackgateUnavailable`` — до сервісу не дійшли або не дочекались.
 
 ``retryable`` — підказка для черги продукту, а не наказ: чи має сенс та сама
 спроба трохи згодом. Бюджет — ні: він скидається лише з новою добою.
@@ -20,8 +20,8 @@ from __future__ import annotations
 from typing import Any
 
 
-class ExoAIError(Exception):
-    """Будь-яка невдача виклику exo-ai."""
+class BlackgateError(Exception):
+    """Будь-яка невдача виклику blackgate."""
 
     retryable: bool = False
 
@@ -42,7 +42,7 @@ class ExoAIError(Exception):
         """Розібране тіло відповіді (або сирий текст, якщо це не JSON)."""
 
 
-class BudgetExhausted(ExoAIError):
+class BudgetExhausted(BlackgateError):
     """429 ``budget_exhausted``: добова стеля продукту чи кінцевого клієнта.
 
     Не білінг і не збій: сервіс просить деградувати в передачу людині
@@ -59,7 +59,7 @@ class BudgetExhausted(ExoAIError):
         self.cap: int | None = body.get("cap")
 
 
-class AllRungsFailed(ExoAIError):
+class AllRungsFailed(BlackgateError):
     """503 ``all_rungs_failed``: драбина тиру вичерпана."""
 
     retryable = True
@@ -70,7 +70,7 @@ class AllRungsFailed(ExoAIError):
         """Кожна спроба драбини — видно, котрий пул чим відповів."""
 
 
-class UnknownTier(ExoAIError):
+class UnknownTier(BlackgateError):
     """400 ``unknown_tier``: тиру немає в реєстрі сервісу."""
 
     def __init__(self, message: str, *, body: dict[str, Any]) -> None:
@@ -79,21 +79,21 @@ class UnknownTier(ExoAIError):
         """Які тири реєстр знає зараз."""
 
 
-class BadRequest(ExoAIError):
+class BadRequest(BlackgateError):
     """400 ``bad_request``: тіло запиту не тієї форми."""
 
     def __init__(self, message: str, *, body: Any) -> None:
         super().__init__(message, status=400, code="bad_request", body=body)
 
 
-class Unauthorized(ExoAIError):
+class Unauthorized(BlackgateError):
     """401: ключа немає або він не виданий жодному продукту."""
 
     def __init__(self, message: str, *, body: Any) -> None:
         super().__init__(message, status=401, code="unauthorized", body=body)
 
 
-class ExoAITimeout(ExoAIError):
+class BlackgateTimeout(BlackgateError):
     """Відповіді не дочекались за таймаут клієнта.
 
     Сервіс при цьому міг і відповісти, і списати виклик зі стелі — він рахує
@@ -103,13 +103,13 @@ class ExoAITimeout(ExoAIError):
     retryable = True
 
 
-class ExoAIUnavailable(ExoAIError):
+class BlackgateUnavailable(BlackgateError):
     """До сервісу не дійшли: DNS, відмова з'єднання, обрив."""
 
     retryable = True
 
 
-class UnexpectedResponse(ExoAIError):
+class UnexpectedResponse(BlackgateError):
     """Код чи тіло, яких контракт не описує (500 сервісу, не-JSON, 404 шляху).
 
     5xx вважаються тимчасовими, решта — ні.

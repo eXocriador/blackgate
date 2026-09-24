@@ -14,14 +14,14 @@ from typing import Any
 import httpx
 import pytest
 
-from exo_ai_client import (
+from blackgate_client import (
     AllRungsFailed,
     BadRequest,
+    Blackgate,
+    BlackgateError,
+    BlackgateTimeout,
+    BlackgateUnavailable,
     BudgetExhausted,
-    ExoAI,
-    ExoAIError,
-    ExoAITimeout,
-    ExoAIUnavailable,
     Message,
     Unauthorized,
     UnexpectedResponse,
@@ -70,11 +70,11 @@ OK_BODY: dict[str, Any] = {
 
 def run(
     handler: Callable[[httpx.Request], httpx.Response],
-    call: Callable[[ExoAI], Any],
+    call: Callable[[Blackgate], Any],
 ) -> Any:
     async def go() -> Any:
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-            ai = ExoAI("http://exo-ai-web:3000/", KEY, client=http)
+            ai = Blackgate("http://blackgate-web:3000/", KEY, client=http)
             return await call(ai)
 
     return asyncio.run(go())
@@ -84,7 +84,7 @@ def reply(status: int, body: Any) -> Callable[[httpx.Request], httpx.Response]:
     return lambda _request: httpx.Response(status, json=body)
 
 
-def complete(ai: ExoAI) -> Any:
+def complete(ai: Blackgate) -> Any:
     return ai.complete("fast", [Message("user", "ping")])
 
 
@@ -108,7 +108,7 @@ def test_request_shape() -> None:
             request_id="r-1",
         ),
     )
-    assert seen["url"] == "http://exo-ai-web:3000/v1/complete"
+    assert seen["url"] == "http://blackgate-web:3000/v1/complete"
     assert seen["auth"] == f"Bearer {KEY}"
     assert seen["body"] == {
         "tier": "capable",
@@ -227,7 +227,7 @@ def test_timeout() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("slow", request=request)
 
-    with pytest.raises(ExoAITimeout) as caught:
+    with pytest.raises(BlackgateTimeout) as caught:
         run(handler, complete)
     assert caught.value.retryable is True
 
@@ -247,22 +247,22 @@ def test_unreachable() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("refused", request=request)
 
-    with pytest.raises(ExoAIUnavailable):
+    with pytest.raises(BlackgateUnavailable):
         run(handler, complete)
 
 
-def test_every_error_is_an_exoai_error() -> None:
+def test_every_error_is_a_blackgate_error() -> None:
     for cls in (
         AllRungsFailed,
         BadRequest,
         BudgetExhausted,
-        ExoAITimeout,
-        ExoAIUnavailable,
+        BlackgateTimeout,
+        BlackgateUnavailable,
         UnexpectedResponse,
         Unauthorized,
         UnknownTier,
     ):
-        assert issubclass(cls, ExoAIError)
+        assert issubclass(cls, BlackgateError)
 
 
 def test_reference_routes() -> None:
@@ -277,7 +277,7 @@ def test_reference_routes() -> None:
             ),
         }[request.url.path]
 
-    async def call(ai: ExoAI) -> Any:
+    async def call(ai: Blackgate) -> Any:
         return await ai.pools(), await ai.tiers(), await ai.usage()
 
     pools, tiers, usage = run(handler, call)
@@ -288,4 +288,4 @@ def test_reference_routes() -> None:
 
 def test_empty_key_is_refused() -> None:
     with pytest.raises(ValueError):
-        ExoAI("http://x", "")
+        Blackgate("http://x", "")
