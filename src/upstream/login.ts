@@ -36,7 +36,12 @@ export type UpstreamState = 'ok' | 'expired' | 'down' | 'unknown';
  *         (`ai_call` 2, 736, 1173; 2026-09-13/15/16);
  *   401 `{"error":"Invalid API key"}` — шлюз не приймає наш `GATEWAY_API_KEY`
  *       (перевірено прямим запитом 2026-09-24, і на `/v1/models`, і на
- *       `/v1/chat/completions`); 403 — те саме іншими словами.
+ *       `/v1/chat/completions`); 403 — те саме іншими словами;
+ *   400 `{"error":{"message":"unknown provider for model <id>",…}}` — у шлюзу
+ *       немає провайдера для моделі: `/v1/models` порожній. Живий інцидент
+ *       2026-09-24: о 12:27Z VibeConduit оновив файл Antigravity і з того
+ *       моменту не знав жодної моделі; старий код бачив лише `rejected (400)`
+ *       на кожній пробі. Для людини дія та сама — перелогінити акаунт.
  *
  * Усі три рядки `auth_unavailable` в історії — ОДНА модель, поки сусіди
  * відповідали. Тому одна така відповідь лишається штрафом моделі (як і було),
@@ -44,7 +49,10 @@ export type UpstreamState = 'ok' | 'expired' | 'down' | 'unknown';
  */
 export function isLoginFailure(res: Pick<CallResult, 'outcome' | 'error'>): boolean {
   if (res.outcome === 'unauthorized') return true;
-  return res.outcome === 'error' && /auth_unavailable|no auth available/i.test(res.error ?? '');
+  const text = res.error ?? '';
+  if (res.outcome === 'error') return /auth_unavailable|no auth available/i.test(text);
+  if (res.outcome === 'rejected') return /unknown provider for model/i.test(text);
+  return false;
 }
 
 /**

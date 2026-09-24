@@ -33,6 +33,12 @@ const authUnavailable = r({
   error: '{"error":{"message":"auth_unavailable: no auth available","type":"server_error"}}',
 });
 const invalidKey = r({ outcome: 'unauthorized', httpStatus: 401, content: null, error: '{"error":"Invalid API key"}' });
+/** Дослівно зі шлюзу 2026-09-24 після 12:27Z, коли `/v1/models` став порожнім. */
+const unknownProvider = r({
+  outcome: 'rejected', httpStatus: 400, content: null,
+  error: '{"error":{"message":"unknown provider for model gemini-3.1-flash-lite","type":"invalid_request_error"}}',
+});
+const invalidArgument = r({ outcome: 'rejected', httpStatus: 400, content: null, error: 'INVALID_ARGUMENT' });
 const noCapacity = r({ outcome: 'error', httpStatus: 503, content: null, error: 'No capacity available for model gemini-2.5-flash' });
 const exhausted = r({ outcome: 'exhausted', httpStatus: 429, content: null, error: 'RESOURCE_EXHAUSTED' });
 const timeout = r({ outcome: 'timeout', httpStatus: null, content: null, error: 'The operation was aborted due to timeout' });
@@ -56,6 +62,8 @@ describe('ознаки відмови входу', () => {
     expect(isLoginFailure(authUnavailable)).toBe(true);
     expect(isLoginFailure(invalidKey)).toBe(true);
     expect(isLoginFailure(r({ outcome: 'unauthorized', httpStatus: 403 }))).toBe(true);
+    expect(isLoginFailure(unknownProvider)).toBe(true);
+    expect(isLoginFailure(invalidArgument)).toBe(false);
     expect(isLoginFailure(noCapacity)).toBe(false);
     expect(isLoginFailure(exhausted)).toBe(false);
     expect(isLoginFailure(timeout)).toBe(false);
@@ -102,6 +110,18 @@ describe('стан входу апстріму', () => {
     const { up } = build();
     for (const m of ['a1', 'b1', 'c1']) up.observe(m, invalidKey);
     expect(up.status().state).toBe('expired');
+  });
+
+  it('шлюз без жодної моделі (400 unknown provider у кожному пулі) — expired', () => {
+    const { up } = build();
+    for (const m of ['a1', 'b1', 'c1']) up.observe(m, unknownProvider);
+    expect(up.status().state).toBe('expired');
+  });
+
+  it('400 на форму запиту в усіх пулах — стан моделей, не входу', () => {
+    const { up } = build();
+    for (const m of ['a1', 'b1', 'c1']) up.observe(m, invalidArgument);
+    expect(up.status().state).toBe('ok');
   });
 
   it('перша ж справжня відповідь після відмови повертає ok', () => {
