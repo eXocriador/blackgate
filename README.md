@@ -157,16 +157,17 @@ npm ci && npm test && npm run typecheck
 
 ## Що лишилось від старої назви — свідомо
 
-* **Python-пакет `exo-ai-client`** (`clients/python`, модуль `exo_ai_client`,
-  клас `ExoAI`): exopost ставить його з git за комітом, і перейменування —
-  це правка й ребілд exopost, а не цього репо.
-* **Імена змінних у споживачах** — `EXO_AI_URL`/`EXO_AI_KEY` (exointel,
-  teamself), `EXOPOST_EXO_AI_*` (exopost): це код трьох продуктів. Значення
-  адреси вже `http://blackgate-web:3000`.
+Перейменування доведене до споживачів того ж дня: Python-пакет тепер
+`blackgate-client` (модуль `blackgate_client`, клас `Blackgate`), змінні —
+`BLACKGATE_URL`/`BLACKGATE_KEY` (exointel, teamself) і
+`EXOPOST_BLACKGATE_URL`/`EXOPOST_BLACKGATE_KEY` (exopost). Лишилось:
+
 * **Префікс виданих ключів продуктів** `exoai-<продукт>-…` — секрети в `.env`
   чотирьох продуктів; ключ лише називає продукт, префікс нічого не значить.
 * **Коментар-шапка `catalog.yaml`** — реєстр моделей правиться окремо від
   перейменування.
+* **Історія**: `generation.provider = 'ExoAIProvider'` у старих рядках exopost,
+  записи CHANGELOG і журналів до 2026-09-24.
 
 ## Ліцензія
 
