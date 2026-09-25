@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@exo/kit": "github:eXocriador/exo-kit#v0.11.0",
+    "bcryptjs": "^3.0.3",
     "ioredis": "^5.4.1",
     "pino": "^9.5.0",
     "postgres": "^3.4.5",

@@ -43,6 +43,18 @@ export const schema = {
   // Рядок журналу без вмісту (хто, коли, статус, токени). 0 — без строку.
   JOURNAL_RETENTION_DAYS: num({ default: 365, min: 0 }),
 
+  // Панель керування — окремий слухач. Без ADMIN_HTPASSWD він не піднімається
+  // зовсім: панель без пароля гірша за відсутню. Рядок той самий, що в Traefik
+  // (`user:$apr1$…` або bcrypt), кілька — через кому.
+  ADMIN_PORT: num({ default: 3001, min: 1, max: 65_535 }),
+  ADMIN_HTPASSWD: str({ optional: true, secret: true, describe: 'htpasswd панелі: user:hash' }),
+  ADMIN_WEB_ROOT: str({ default: '/app/web' }),
+
+  // Management API двигуна під VibeConduit (лише читання стану акаунтів). Немає —
+  // розділ «Підписки» каже, як увімкнути.
+  UPSTREAM_MANAGEMENT_KEY: str({ optional: true, secret: true }),
+  UPSTREAM_PANEL_URL: url({ optional: true, protocols: ['http', 'https'] }),
+
   APP_VERSION: str({ default: 'dev' }),
   SENTRY_DSN: str({ optional: true }),
   LOG_LEVEL: str({ default: 'info' }),

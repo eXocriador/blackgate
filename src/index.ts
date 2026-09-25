@@ -19,6 +19,12 @@ import { createLedger } from './accounting/ledger.js';
 import { createJournal } from './journal/journal.js';
 import { createRetention } from './journal/retention.js';
 import { capsFor, createSettings } from './settings/settings.js';
+import { createBasicAuth, parseHtpasswd, HtpasswdError } from './admin/basic.js';
+import { createChanges } from './admin/changes.js';
+import { createQueries } from './admin/queries.js';
+import { createUpstreamAdmin } from './admin/upstream.js';
+import { createAdminServer } from './admin/server.js';
+import { stat } from 'node:fs/promises';
 import { parseProductKeys, KeyConfigError } from './http/auth.js';
 import { createHttpServer } from './http/server.js';
 import { loadStub, describeRoutes, StubConfigError } from './stub/config.js';
@@ -166,9 +172,9 @@ async function main(): Promise<void> {
   // `checks.upstream`: протухлий вхід до Google — 503, хоч пули й «придатні».
   const health = withUpstream(infra, upstream);
 
+  const caps = (product: string) => capsFor(settings.current(), product);
   const server = createHttpServer({
-    keys, catalog, pools, ladder, budget, journal, stub, health,
-    caps: (product) => capsFor(settings.current(), product),
+    keys, catalog, pools, ladder, budget, journal, stub, health, caps,
     version: env.APP_VERSION,
     logWarn,
   });
@@ -176,6 +182,43 @@ async function main(): Promise<void> {
   server.listen(env.PORT, '0.0.0.0', () => {
     logInfo('boot.listening', { port: env.PORT, version: env.APP_VERSION });
   });
+
+  // Панель — лише з паролем. Поганий ADMIN_HTPASSWD валить старт так само, як
+  // поганий реєстр: тихо вимкнена панель, на яку розраховують, — теж поломка.
+  let admin: ReturnType<typeof createAdminServer> | null = null;
+  if (env.ADMIN_HTPASSWD) {
+    const webRoot = (await stat(env.ADMIN_WEB_ROOT).catch(() => null))?.isDirectory() ? env.ADMIN_WEB_ROOT : null;
+    admin = createAdminServer({
+      auth: createBasicAuth({ entries: parseHtpasswd(env.ADMIN_HTPASSWD) }),
+      version: env.APP_VERSION,
+      products: keys.products,
+      catalog,
+      stubConfig,
+      pools,
+      budget,
+      settings,
+      changes: createChanges({
+        db, catalogPath: env.CATALOG_PATH, stubPath: env.STUB_PATH,
+        catalog, stub: stubConfig, settings, logInfo,
+      }),
+      queries: createQueries(db),
+      journal,
+      upstream: createUpstreamAdmin({ baseUrl: env.GATEWAY_URL, key: env.UPSTREAM_MANAGEMENT_KEY }),
+      upstreamPanelUrl: env.UPSTREAM_PANEL_URL ?? null,
+      health,
+      complete: { catalog, ladder, budget, stub, caps },
+      retention,
+      webRoot,
+      startedAt: new Date(),
+      logInfo,
+      logWarn,
+    });
+    admin.listen(env.ADMIN_PORT, '0.0.0.0', () => {
+      logInfo('boot.admin_listening', { port: env.ADMIN_PORT, web: webRoot });
+    });
+  } else {
+    logWarn('boot.admin_disabled', { reason: 'ADMIN_HTPASSWD порожній' });
+  }
 
   // Перший обхід пулів одразу, далі за розкладом. Без нього перші хвилини
   // життя сервіс ходив би в мертвий пул за рахунок клієнта — рівно те, від
@@ -190,6 +233,7 @@ async function main(): Promise<void> {
     settings.stop();
     catalog.stop();
     stubConfig.stop();
+    admin?.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 5_000).unref();
   };
@@ -204,7 +248,7 @@ main().catch((err) => {
     console.error(`blackgate: реєстр непридатний — сервіс не стартує\n  - ${err.problems.join('\n  - ')}`);
   } else if (err instanceof StubConfigError) {
     console.error(`blackgate: stub.yaml непридатний — сервіс не стартує\n  - ${err.problems.join('\n  - ')}`);
-  } else if (err instanceof KeyConfigError) {
+  } else if (err instanceof KeyConfigError || err instanceof HtpasswdError) {
     console.error(`blackgate: ${err.message}`);
   } else {
     console.error('blackgate: старт не вдався', err);
