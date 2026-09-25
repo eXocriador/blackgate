@@ -18,6 +18,8 @@ import { createBudget } from './accounting/budget.js';
 import { createLedger } from './accounting/ledger.js';
 import { parseProductKeys, KeyConfigError } from './http/auth.js';
 import { createHttpServer } from './http/server.js';
+import { loadStub, describeRoutes, StubConfigError } from './stub/config.js';
+import { createStub } from './stub/run.js';
 
 async function main(): Promise<void> {
   const env = loadEnv();
@@ -50,6 +52,17 @@ async function main(): Promise<void> {
     models: cat.models.size,
     tiers: cat.tierNames,
   });
+
+  // Заглушка — після реєстру і з тим самим правилом: поганий файл на старті
+  // валить процес, бо тихо вимкнена заглушка, на яку хтось розраховує, так
+  // само погана, як тихо ввімкнена.
+  const stubConfig = await loadStub({
+    path: env.STUB_PATH,
+    watchIntervalMs: env.CATALOG_WATCH_MS,
+    logInfo,
+    logWarn,
+  });
+  logInfo('boot.stub', { path: env.STUB_PATH, routes: describeRoutes(stubConfig.current()) });
 
   const db = createDb({
     url: env.DATABASE_URL,
@@ -86,6 +99,7 @@ async function main(): Promise<void> {
   const ladder = createLadder({ gateway, pools, retries: env.LADDER_RETRIES, logWarn });
   const budget = createBudget({ redis, logWarn });
   const ledger = createLedger({ db, catalog: () => catalog.current(), logWarn });
+  const stub = createStub({ config: () => stubConfig.current(), retries: env.LADDER_RETRIES });
 
   const infra = createHealth({
     version: env.APP_VERSION,
@@ -124,7 +138,7 @@ async function main(): Promise<void> {
   const health = withUpstream(infra, upstream);
 
   const server = createHttpServer({
-    keys, catalog, pools, ladder, budget, ledger, health,
+    keys, catalog, pools, ladder, budget, ledger, stub, health,
     caps: { product: env.DAILY_CAP_PER_PRODUCT, subject: env.DAILY_CAP_PER_SUBJECT },
     version: env.APP_VERSION,
     logWarn,
@@ -143,6 +157,7 @@ async function main(): Promise<void> {
     logInfo('shutdown', { signal });
     pools.stop();
     catalog.stop();
+    stubConfig.stop();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 5_000).unref();
   };
@@ -155,6 +170,8 @@ main().catch((err) => {
   // рядком: оператор має побачити все, що не так, за один запуск.
   if (err instanceof CatalogError) {
     console.error(`blackgate: реєстр непридатний — сервіс не стартує\n  - ${err.problems.join('\n  - ')}`);
+  } else if (err instanceof StubConfigError) {
+    console.error(`blackgate: stub.yaml непридатний — сервіс не стартує\n  - ${err.problems.join('\n  - ')}`);
   } else if (err instanceof KeyConfigError) {
     console.error(`blackgate: ${err.message}`);
   } else {

@@ -15,6 +15,8 @@ import { UnknownTierError } from '../ladder/run.js';
 import type { Budget } from '../accounting/budget.js';
 import type { createLedger } from '../accounting/ledger.js';
 import type { ChatMessage } from '../upstream/types.js';
+import type { LadderResult } from '../ladder/run.js';
+import { readScenario, StubScenarioError, type Scenario, type Stub } from '../stub/run.js';
 
 export interface ServerDeps {
   keys: ProductKeys;
@@ -23,6 +25,8 @@ export interface ServerDeps {
   ladder: Ladder;
   budget: Budget;
   ledger: ReturnType<typeof createLedger>;
+  /** Заглушка замість моделей — лише там, де її ввімкнув `stub.yaml`. */
+  stub?: Stub;
   health: { live(): Promise<Response> | Response; ready(): Promise<Response> | Response };
   caps: { product: number; subject: number };
   version: string;
@@ -118,6 +122,39 @@ async function complete(
   const maxTokens = clampInt(body.max_tokens, 1, 32_000, 512);
   const temperature = clampFloat(body.temperature, 0, 2, 0.3);
 
+  const catalog = deps.catalog.current();
+  // Тир звіряється ДО заглушки: помилка інтеграції лишається помилкою
+  // інтеграції, хоч би хто відповідав. Драбина перевіряє те саме, але
+  // заглушка в режимі `always` до неї не доходить.
+  if (!catalog.tiers.has(tier)) {
+    return send(res, 400, {
+      error: 'unknown_tier',
+      detail: `тир "${tier}" не оголошений; є: ${catalog.tierNames.join(', ') || '(жодного)'}`,
+      tiers: catalog.tierNames,
+    });
+  }
+
+  const stubRoute = deps.stub?.route(product, subject) ?? null;
+  // Мітки сценаріїв діють лише там, де заглушка відповідає замість моделей:
+  // у `fallback` і без заглушки `[stub:…]` — просто текст для моделі.
+  let scenario: Scenario | null = null;
+  if (stubRoute?.mode === 'always') {
+    try {
+      scenario = readScenario(messages);
+    } catch (err) {
+      if (err instanceof StubScenarioError) return send(res, 400, { error: 'bad_request', detail: err.message, stub: true });
+      throw err;
+    }
+    if (scenario === 'budget') {
+      // Та сама форма, що й у справжньої стелі, — продукт має пройти ту саму
+      // гілку «передати людині». Лічильник не чіпається: стеля не вичерпана.
+      return send(res, 429, {
+        error: 'budget_exhausted', scope: 'product', used: deps.caps.product, cap: deps.caps.product,
+        degrade: 'human_handoff', stub: true,
+      });
+    }
+  }
+
   // Стеля рахується ПЕРЕД викликом: обірваний на півдорозі запит спалив ті
   // токени, які спалив.
   const verdict = await deps.budget.consume({
@@ -140,15 +177,28 @@ async function complete(
     });
   }
 
-  const catalog = deps.catalog.current();
-  let result;
-  try {
-    result = await deps.ladder.run(catalog, { tier, messages, maxTokens, temperature });
-  } catch (err) {
-    if (err instanceof UnknownTierError) {
-      return send(res, 400, { error: 'unknown_tier', detail: err.message, tiers: catalog.tierNames });
+  const stubRequest = { product, subject, tier, messages, maxTokens, temperature, scenario };
+  let result: LadderResult;
+  let stubbed = false;
+  if (stubRoute?.mode === 'always') {
+    result = await deps.stub!.run(stubRequest);
+    stubbed = true;
+  } else {
+    try {
+      result = await deps.ladder.run(catalog, { tier, messages, maxTokens, temperature });
+    } catch (err) {
+      if (err instanceof UnknownTierError) {
+        return send(res, 400, { error: 'unknown_tier', detail: err.message, tiers: catalog.tierNames });
+      }
+      throw err;
     }
-    throw err;
+    if (!result.ok && stubRoute?.mode === 'fallback') {
+      // Справжні спроби лишаються в `attempts` і в обліку: те, що моделі
+      // лежали, — факт, який заглушка не має ховати. Сходинки заглушки
+      // йдуть номерами ПІСЛЯ справжніх.
+      result = appendStub(result, await deps.stub!.run(stubRequest), catalog.tiers.get(tier)!.length);
+      stubbed = true;
+    }
   }
 
   // Облік не тримає відповідь: продукт, якому підтримка потрібна зараз, не має
@@ -163,6 +213,7 @@ async function complete(
       tier,
       attempts: result.attempts,
       totalLatencyMs: result.totalLatencyMs,
+      ...(stubbed ? { stub: true } : {}),
     });
   }
 
@@ -176,7 +227,17 @@ async function complete(
     // основна модель, — інакше деградація знову стає невидимою.
     attempts: result.attempts,
     totalLatencyMs: result.totalLatencyMs,
+    ...(stubbed ? { stub: true } : {}),
   });
+}
+
+function appendStub(real: LadderResult, stub: LadderResult, offset: number): LadderResult {
+  return {
+    ...stub,
+    rung: stub.rung === null ? null : stub.rung + offset,
+    attempts: [...real.attempts, ...stub.attempts.map((a) => ({ ...a, rung: a.rung + offset }))],
+    totalLatencyMs: real.totalLatencyMs + stub.totalLatencyMs,
+  };
 }
 
 function readMessages(body: CompleteBody): ChatMessage[] | null {

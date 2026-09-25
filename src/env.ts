@@ -15,6 +15,9 @@ export const schema = {
   // Реєстр моделей. Монтується з теки продукту :ro, тож правиться без релізу.
   CATALOG_PATH: str({ default: '/app/config/catalog.yaml' }),
   CATALOG_WATCH_MS: num({ default: 15_000, min: 0 }),
+  // Заглушка замість моделей — кому і як (src/stub/config.ts). Та сама тека,
+  // що й реєстр; файла немає — заглушка вимкнена для всіх.
+  STUB_PATH: str({ default: '/app/config/stub.yaml' }),
 
   // Ключі продуктів: "<продукт>:<секрет>", через кому. Ключ на продукт — те,
   // чого не було: exointel і teamself ходили кожен зі своїм ключем до шлюзу,
