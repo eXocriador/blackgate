@@ -113,6 +113,11 @@ export function cannedFor(
 
 export interface StubHandle {
   current(): StubConfig;
+  /**
+   * Перечитати зараз, не чекаючи обходу за mtime. `true` — прийнято (або файла
+   * немає — вимкнено); `false` — відхилено, у роботі лишився попередній.
+   */
+  reload(): Promise<boolean>;
   stop(): void;
 }
 
@@ -133,27 +138,33 @@ export async function loadStub(config: StubHandleConfig): Promise<StubHandle> {
   let seenMtime = await mtimeOf(config.path);
   let current = seenMtime === null ? EMPTY_STUB : parseStub(await readFile(config.path, 'utf8'));
 
+  async function reload(m: number | null): Promise<boolean> {
+    seenMtime = m;
+    if (m === null) {
+      current = EMPTY_STUB;
+      config.logInfo?.('stub.removed', { path: config.path });
+      return true;
+    }
+    try {
+      current = parseStub(await readFile(config.path, 'utf8'));
+      config.logInfo?.('stub.reloaded', { path: config.path, routes: describeRoutes(current) });
+      return true;
+    } catch (err) {
+      config.logWarn?.('stub.reload_rejected', {
+        path: config.path,
+        problems: err instanceof StubConfigError ? err.problems : [(err as Error).message],
+      });
+      return false;
+    }
+  }
+
   let timer: ReturnType<typeof setInterval> | undefined;
   if (interval > 0) {
     timer = setInterval(() => {
       void (async () => {
         const m = await mtimeOf(config.path);
         if (m === seenMtime) return;
-        seenMtime = m;
-        if (m === null) {
-          current = EMPTY_STUB;
-          config.logInfo?.('stub.removed', { path: config.path });
-          return;
-        }
-        try {
-          current = parseStub(await readFile(config.path, 'utf8'));
-          config.logInfo?.('stub.reloaded', { path: config.path, routes: describeRoutes(current) });
-        } catch (err) {
-          config.logWarn?.('stub.reload_rejected', {
-            path: config.path,
-            problems: err instanceof StubConfigError ? err.problems : [(err as Error).message],
-          });
-        }
+        await reload(m);
       })();
     }, interval);
     timer.unref();
@@ -161,6 +172,7 @@ export async function loadStub(config: StubHandleConfig): Promise<StubHandle> {
 
   return {
     current: () => current,
+    reload: async () => reload(await mtimeOf(config.path)),
     stop: () => { if (timer) clearInterval(timer); },
   };
 }

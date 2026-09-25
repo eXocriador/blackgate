@@ -18,6 +18,7 @@ import { createBudget } from './accounting/budget.js';
 import { createLedger } from './accounting/ledger.js';
 import { createJournal } from './journal/journal.js';
 import { createRetention } from './journal/retention.js';
+import { capsFor, createSettings } from './settings/settings.js';
 import { parseProductKeys, KeyConfigError } from './http/auth.js';
 import { createHttpServer } from './http/server.js';
 import { loadStub, describeRoutes, StubConfigError } from './stub/config.js';
@@ -100,12 +101,30 @@ async function main(): Promise<void> {
 
   const ladder = createLadder({ gateway, pools, retries: env.LADDER_RETRIES, logWarn });
   const budget = createBudget({ redis, logWarn });
+  // Налаштування: .env — дефолти, рядок `setting` — перекриття з панелі.
+  const settings = createSettings({
+    db,
+    defaults: {
+      capProduct: env.DAILY_CAP_PER_PRODUCT,
+      capSubject: env.DAILY_CAP_PER_SUBJECT,
+      storeContent: env.JOURNAL_STORE_CONTENT,
+      contentDays: env.JOURNAL_CONTENT_DAYS,
+      retentionDays: env.JOURNAL_RETENTION_DAYS,
+    },
+    logWarn,
+  });
+  if (env.DATABASE_URL) {
+    // Не вирок старту: без бази сервіс працює на дефолтах з .env, як і до панелі.
+    if (!(await settings.refresh())) logWarn('boot.settings_unavailable', {});
+    settings.start();
+  }
+
   const ledger = createLedger({ db, catalog: () => catalog.current(), logWarn });
-  const journal = createJournal({ db, ledger, storeContent: () => env.JOURNAL_STORE_CONTENT, logWarn });
+  const journal = createJournal({ db, ledger, storeContent: () => settings.current().journal.storeContent, logWarn });
   const retention = createRetention({
     db,
-    contentDays: () => env.JOURNAL_CONTENT_DAYS,
-    journalDays: () => env.JOURNAL_RETENTION_DAYS,
+    contentDays: () => settings.current().journal.contentDays,
+    journalDays: () => settings.current().journal.retentionDays,
     logInfo,
     logWarn,
   });
@@ -149,7 +168,7 @@ async function main(): Promise<void> {
 
   const server = createHttpServer({
     keys, catalog, pools, ladder, budget, journal, stub, health,
-    caps: () => ({ product: env.DAILY_CAP_PER_PRODUCT, subject: env.DAILY_CAP_PER_SUBJECT }),
+    caps: (product) => capsFor(settings.current(), product),
     version: env.APP_VERSION,
     logWarn,
   });
@@ -168,6 +187,7 @@ async function main(): Promise<void> {
     logInfo('shutdown', { signal });
     pools.stop();
     retention.stop();
+    settings.stop();
     catalog.stop();
     stubConfig.stop();
     server.close(() => process.exit(0));
