@@ -7,7 +7,7 @@ import { createLadder } from '../src/ladder/run.js';
 import { parseProductKeys } from '../src/http/auth.js';
 import { createHttpServer } from '../src/http/server.js';
 import type { Budget } from '../src/accounting/budget.js';
-import type { LedgerRow } from '../src/accounting/ledger.js';
+import type { JournalEntry } from '../src/journal/journal.js';
 import type { CallResult, Gateway } from '../src/upstream/gateway.js';
 import { parseStub, routeFor, StubConfigError, EMPTY_STUB, type StubConfig } from '../src/stub/config.js';
 import { findSchema, instanceOf } from '../src/stub/schema-json.js';
@@ -263,7 +263,7 @@ async function start(stubCfg: StubConfig) {
   const { gw, calls } = deadGateway();
   const pools = createPoolHealth({ gateway: gw, catalog: () => catalog });
   const ladder = createLadder({ gateway: gw, pools, retries: 0, sleep: noSleep });
-  const ledgerRows: LedgerRow[] = [];
+  const entries: JournalEntry[] = [];
   let consumed = 0;
   const budget = {
     async consume() { consumed++; return { allowed: true, scope: null, used: consumed, cap: 100 }; },
@@ -274,10 +274,10 @@ async function start(stubCfg: StubConfig) {
     keys: parseProductKeys(`exopost:${KEYS.exopost},teamself:${KEYS.teamself}`),
     catalog: { current: () => catalog, reload: async () => false, stop: () => {} },
     pools, ladder, budget,
-    ledger: { async record(rows: LedgerRow[]) { ledgerRows.push(...rows); } },
+    journal: { async record(e: JournalEntry) { entries.push(e); return entries.length; } },
     stub: createStub({ config: () => stubCfg, retries: 0, sleep: noSleep }),
     health: { live: () => new Response('{}'), ready: () => new Response('{}') },
-    caps: { product: 100, subject: 10 },
+    caps: () => ({ product: 100, subject: 10 }),
     version: 'test',
   });
   await new Promise<void>((r) => server!.listen(0, '127.0.0.1', r));
@@ -291,7 +291,9 @@ async function start(stubCfg: StubConfig) {
     });
     return { status: res.status, body: (await res.json()) as Record<string, unknown> };
   }
-  return { complete, calls, ledgerRows, consumed: () => consumed };
+  // Рядки обліку — спроби кожного запиту журналу, як їх пише journal.record.
+  const ledgerRows = () => entries.flatMap((e) => e.attempts.map((attempt) => ({ tier: e.tier, attempt })));
+  return { complete, calls, entries, ledgerRows, consumed: () => consumed };
 }
 
 const CFG = parseStub(`
@@ -310,7 +312,7 @@ describe('HTTP із заглушкою', () => {
     expect(r.body).toMatchObject({ stub: true, model: STUB_PRIMARY, pool: 'stub-a', rung: 0, tier: 'fast' });
     expect(s.calls).toEqual([]);
     expect(s.consumed()).toBe(1);
-    expect(s.ledgerRows.map((x) => [x.tier, x.attempt.pool])).toEqual([['fast', 'stub-a']]);
+    expect(s.ledgerRows().map((x) => [x.tier, x.attempt.pool])).toEqual([['fast', 'stub-a']]);
   });
 
   it('always: сценарій 429 спускає драбиною заглушки', async () => {
@@ -359,7 +361,7 @@ describe('HTTP із заглушкою', () => {
       [1, 'b1', 'exhausted'],
       [2, STUB_PRIMARY, 'ok'],
     ]);
-    expect(s.ledgerRows).toHaveLength(3);
+    expect(s.ledgerRows()).toHaveLength(3);
   });
 
   it('fallback: мітки не діють — це текст для моделі', async () => {

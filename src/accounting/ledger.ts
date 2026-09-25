@@ -35,9 +35,21 @@ export function createLedger(config: LedgerConfig) {
    */
   async function record(rows: LedgerRow[]): Promise<void> {
     if (rows.length === 0) return;
-    const cat = config.catalog();
+    const out = await config.db.tryQuery(
+      (sql) => sql`INSERT INTO ai_call ${sql(payload(rows) as unknown as Record<string, unknown>[])}`,
+    );
+    if (!out.ok) {
+      config.logWarn?.('ledger.write_failed', { reason: out.reason, rows: rows.length });
+    }
+  }
 
-    const payload = rows.map((r) => ({
+  /**
+   * Рядки `ai_call` — як їх пише `record`, плюс посилання на запит журналу.
+   * Виділено, щоб журнал писав запит і його спроби однією транзакцією.
+   */
+  function payload(rows: LedgerRow[], requestRef: number | null = null) {
+    const cat = config.catalog();
+    return rows.map((r) => ({
       product: r.product,
       subject: r.subject,
       request_id: r.requestId,
@@ -54,18 +66,14 @@ export function createLedger(config: LedgerConfig) {
       total_tokens: r.attempt.totalTokens,
       cost_usd: estimateCost(cat, r.attempt),
       detail: r.attempt.detail ? r.attempt.detail.slice(0, 2000) : null,
+      request_ref: requestRef,
     }));
-
-    const out = await config.db.tryQuery(
-      (sql) => sql`INSERT INTO ai_call ${sql(payload as unknown as Record<string, unknown>[])}`,
-    );
-    if (!out.ok) {
-      config.logWarn?.('ledger.write_failed', { reason: out.reason, rows: rows.length });
-    }
   }
 
-  return { record };
+  return { record, payload };
 }
+
+export type Ledger = ReturnType<typeof createLedger>;
 
 /**
  * Вартість — лише якщо реєстр знає ціну. Інакше `null`.

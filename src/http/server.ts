@@ -11,12 +11,10 @@ import { readKey } from './auth.js';
 import type { CatalogHandle } from '../catalog/index.js';
 import type { PoolHealth } from '../pools/health.js';
 import type { Ladder } from '../ladder/run.js';
-import { UnknownTierError } from '../ladder/run.js';
 import type { Budget } from '../accounting/budget.js';
-import type { createLedger } from '../accounting/ledger.js';
-import type { ChatMessage } from '../upstream/types.js';
-import type { LadderResult } from '../ladder/run.js';
-import { readScenario, StubScenarioError, type Scenario, type Stub } from '../stub/run.js';
+import type { Journal, JournalEntry, TraceContext } from '../journal/journal.js';
+import type { Stub } from '../stub/run.js';
+import { runComplete, type Caps } from './complete.js';
 
 export interface ServerDeps {
   keys: ProductKeys;
@@ -24,11 +22,15 @@ export interface ServerDeps {
   pools: PoolHealth;
   ladder: Ladder;
   budget: Budget;
-  ledger: ReturnType<typeof createLedger>;
+  /** Журнал запитів; пише і спроби в `ai_call`. */
+  journal: Journal;
   /** Заглушка замість моделей — лише там, де її ввімкнув `stub.yaml`. */
   stub?: Stub;
   health: { live(): Promise<Response> | Response; ready(): Promise<Response> | Response };
-  caps: { product: number; subject: number };
+  /** Стелі продукту — з перекриттям у налаштуваннях. */
+  caps: (product: string) => Caps;
+  /** Трейс-контекст запиту (заголовки + тіло); без нього — null. */
+  readTrace?: (headers: IncomingMessage['headers'], body: unknown) => TraceContext | null;
   version: string;
   logWarn?: (event: string, fields?: Record<string, unknown>) => void;
 }
@@ -55,6 +57,11 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ServerDep
 
   const product = deps.keys.resolve(readKey(req.headers as Record<string, string | undefined>));
   if (!product) {
+    // Невпізнаний ключ на /v1/complete — теж рядок журналу, але без вмісту:
+    // хто питав, невідомо, а чужий текст зберігати нема підстав.
+    if (req.method === 'POST' && path === '/v1/complete') {
+      void deps.journal.record(refusalEntry(null, 401, 'unauthorized', null));
+    }
     // Той самий текст і на відсутній, і на невірний ключ: різниця між ними —
     // підказка тому, хто перебирає.
     return send(res, 401, { error: 'unauthorized' });
@@ -76,7 +83,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ServerDep
 
   if (req.method === 'GET' && path === '/v1/usage') {
     const used = await deps.budget.used('product', product);
-    return send(res, 200, { product, usedToday: used, cap: deps.caps.product });
+    return send(res, 200, { product, usedToday: used, cap: deps.caps(product).product });
   }
 
   if (req.method === 'POST' && path === '/v1/complete') {
@@ -86,187 +93,40 @@ async function handle(req: IncomingMessage, res: ServerResponse, deps: ServerDep
   send(res, 404, { error: 'not_found' });
 }
 
-interface CompleteBody {
-  tier?: unknown;
-  messages?: unknown;
-  prompt?: unknown;
-  max_tokens?: unknown;
-  temperature?: unknown;
-  subject?: unknown;
-  request_id?: unknown;
-}
-
 async function complete(
   req: IncomingMessage,
   res: ServerResponse,
   deps: ServerDeps,
   product: string,
 ): Promise<void> {
-  let body: CompleteBody;
+  let raw: string;
   try {
-    body = JSON.parse(await readBody(req)) as CompleteBody;
+    raw = await readBody(req);
   } catch (err) {
+    void deps.journal.record(refusalEntry(product, 400, 'bad_request', (err as Error).message));
     return send(res, 400, { error: 'bad_request', detail: (err as Error).message });
   }
 
-  const tier = typeof body.tier === 'string' ? body.tier : null;
-  if (!tier) return send(res, 400, { error: 'bad_request', detail: 'потрібен tier' });
-
-  const messages = readMessages(body);
-  if (!messages) {
-    return send(res, 400, { error: 'bad_request', detail: 'потрібен messages[] або prompt' });
-  }
-
-  const subject = typeof body.subject === 'string' && body.subject ? body.subject.slice(0, 200) : null;
-  const requestId = typeof body.request_id === 'string' ? body.request_id.slice(0, 100) : null;
-  const maxTokens = clampInt(body.max_tokens, 1, 32_000, 512);
-  const temperature = clampFloat(body.temperature, 0, 2, 0.3);
-
-  const catalog = deps.catalog.current();
-  // Тир звіряється ДО заглушки: помилка інтеграції лишається помилкою
-  // інтеграції, хоч би хто відповідав. Драбина перевіряє те саме, але
-  // заглушка в режимі `always` до неї не доходить.
-  if (!catalog.tiers.has(tier)) {
-    return send(res, 400, {
-      error: 'unknown_tier',
-      detail: `тир "${tier}" не оголошений; є: ${catalog.tierNames.join(', ') || '(жодного)'}`,
-      tiers: catalog.tierNames,
-    });
-  }
-
-  const stubRoute = deps.stub?.route(product, subject) ?? null;
-  // Мітки сценаріїв діють лише там, де заглушка відповідає замість моделей:
-  // у `fallback` і без заглушки `[stub:…]` — просто текст для моделі.
-  let scenario: Scenario | null = null;
-  if (stubRoute?.mode === 'always') {
-    try {
-      scenario = readScenario(messages);
-    } catch (err) {
-      if (err instanceof StubScenarioError) return send(res, 400, { error: 'bad_request', detail: err.message, stub: true });
-      throw err;
-    }
-    if (scenario === 'budget') {
-      // Та сама форма, що й у справжньої стелі, — продукт має пройти ту саму
-      // гілку «передати людині». Лічильник не чіпається: стеля не вичерпана.
-      return send(res, 429, {
-        error: 'budget_exhausted', scope: 'product', used: deps.caps.product, cap: deps.caps.product,
-        degrade: 'human_handoff', stub: true,
-      });
-    }
-  }
-
-  // Стеля рахується ПЕРЕД викликом: обірваний на півдорозі запит спалив ті
-  // токени, які спалив.
-  const verdict = await deps.budget.consume({
-    product,
-    productCap: deps.caps.product,
-    subject,
-    subjectCap: deps.caps.subject,
-  });
-
-  if (!verdict.allowed) {
-    // 429, а не 402. Стеля тут — не білінг: продукт мусить деградувати в
-    // передачу людині, а не виставити клієнтові рахунок. Ця властивість
-    // перенесена з обох копій spend.ts свідомо.
-    return send(res, 429, {
-      error: 'budget_exhausted',
-      scope: verdict.scope,
-      used: verdict.used,
-      cap: verdict.cap,
-      degrade: 'human_handoff',
-    });
-  }
-
-  const stubRequest = { product, subject, tier, messages, maxTokens, temperature, scenario };
-  let result: LadderResult;
-  let stubbed = false;
-  if (stubRoute?.mode === 'always') {
-    result = await deps.stub!.run(stubRequest);
-    stubbed = true;
-  } else {
-    try {
-      result = await deps.ladder.run(catalog, { tier, messages, maxTokens, temperature });
-    } catch (err) {
-      if (err instanceof UnknownTierError) {
-        return send(res, 400, { error: 'unknown_tier', detail: err.message, tiers: catalog.tierNames });
-      }
-      throw err;
-    }
-    if (!result.ok && stubRoute?.mode === 'fallback') {
-      // Справжні спроби лишаються в `attempts` і в обліку: те, що моделі
-      // лежали, — факт, який заглушка не має ховати. Сходинки заглушки
-      // йдуть номерами ПІСЛЯ справжніх.
-      result = appendStub(result, await deps.stub!.run(stubRequest), catalog.tiers.get(tier)!.length);
-      stubbed = true;
-    }
-  }
-
-  // Облік не тримає відповідь: продукт, якому підтримка потрібна зараз, не має
-  // чекати на insert.
-  void deps.ledger.record(
-    result.attempts.map((attempt) => ({ product, subject, requestId, tier, attempt })),
-  );
-
-  if (!result.ok) {
-    return send(res, 503, {
-      error: 'all_rungs_failed',
-      tier,
-      attempts: result.attempts,
-      totalLatencyMs: result.totalLatencyMs,
-      ...(stubbed ? { stub: true } : {}),
-    });
-  }
-
-  send(res, 200, {
-    content: result.content,
-    model: result.model,
-    pool: result.pool,
-    rung: result.rung,
-    tier,
-    // Спроби віддаються клієнтові теж: продукт має бачити, що відповіла не
-    // основна модель, — інакше деградація знову стає невидимою.
-    attempts: result.attempts,
-    totalLatencyMs: result.totalLatencyMs,
-    ...(stubbed ? { stub: true } : {}),
-  });
+  const trace = deps.readTrace ? deps.readTrace(req.headers, safeParse(raw)) : null;
+  const out = await runComplete(deps, { product, source: 'api', body: raw, trace });
+  send(res, out.status, out.body);
+  // Журнал (і облік спроб) не тримає відповідь: продукт, якому підтримка
+  // потрібна зараз, не має чекати на insert.
+  void deps.journal.record(out.entry);
 }
 
-function appendStub(real: LadderResult, stub: LadderResult, offset: number): LadderResult {
+function safeParse(raw: string): unknown {
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+/** Відмова ще до ядра: невпізнаний ключ або тіло, яке не дочитали. */
+function refusalEntry(product: string | null, status: number, error: string, detail: string | null): JournalEntry {
   return {
-    ...stub,
-    rung: stub.rung === null ? null : stub.rung + offset,
-    attempts: [...real.attempts, ...stub.attempts.map((a) => ({ ...a, rung: a.rung + offset }))],
-    totalLatencyMs: real.totalLatencyMs + stub.totalLatencyMs,
+    at: new Date(), source: 'api', product, subject: null, requestId: null, trace: null,
+    tier: null, stub: false, params: null, input: null, output: null,
+    status, error, errorDetail: detail,
+    model: null, pool: null, rung: null, attempts: [], latencyMs: 0,
   };
-}
-
-function readMessages(body: CompleteBody): ChatMessage[] | null {
-  if (typeof body.prompt === 'string' && body.prompt.trim()) {
-    return [{ role: 'user', content: body.prompt }];
-  }
-  if (!Array.isArray(body.messages) || body.messages.length === 0) return null;
-
-  const out: ChatMessage[] = [];
-  for (const raw of body.messages) {
-    if (typeof raw !== 'object' || raw === null) return null;
-    const { role, content } = raw as { role?: unknown; content?: unknown };
-    if (role !== 'system' && role !== 'user' && role !== 'assistant') return null;
-    if (typeof content !== 'string') return null;
-    out.push({ role, content });
-  }
-  return out;
-}
-
-function clampInt(v: unknown, min: number, max: number, fallback: number): number {
-  const n = typeof v === 'number' ? Math.trunc(v) : NaN;
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, n));
-}
-
-function clampFloat(v: unknown, min: number, max: number, fallback: number): number {
-  const n = typeof v === 'number' ? v : NaN;
-  if (!Number.isFinite(n)) return fallback;
-  return Math.min(max, Math.max(min, n));
 }
 
 function readBody(req: IncomingMessage): Promise<string> {

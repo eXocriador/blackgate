@@ -16,6 +16,8 @@ import { createPoolHealth } from './pools/health.js';
 import { createLadder } from './ladder/run.js';
 import { createBudget } from './accounting/budget.js';
 import { createLedger } from './accounting/ledger.js';
+import { createJournal } from './journal/journal.js';
+import { createRetention } from './journal/retention.js';
 import { parseProductKeys, KeyConfigError } from './http/auth.js';
 import { createHttpServer } from './http/server.js';
 import { loadStub, describeRoutes, StubConfigError } from './stub/config.js';
@@ -99,6 +101,14 @@ async function main(): Promise<void> {
   const ladder = createLadder({ gateway, pools, retries: env.LADDER_RETRIES, logWarn });
   const budget = createBudget({ redis, logWarn });
   const ledger = createLedger({ db, catalog: () => catalog.current(), logWarn });
+  const journal = createJournal({ db, ledger, storeContent: () => env.JOURNAL_STORE_CONTENT, logWarn });
+  const retention = createRetention({
+    db,
+    contentDays: () => env.JOURNAL_CONTENT_DAYS,
+    journalDays: () => env.JOURNAL_RETENTION_DAYS,
+    logInfo,
+    logWarn,
+  });
   const stub = createStub({ config: () => stubConfig.current(), retries: env.LADDER_RETRIES });
 
   const infra = createHealth({
@@ -138,8 +148,8 @@ async function main(): Promise<void> {
   const health = withUpstream(infra, upstream);
 
   const server = createHttpServer({
-    keys, catalog, pools, ladder, budget, ledger, stub, health,
-    caps: { product: env.DAILY_CAP_PER_PRODUCT, subject: env.DAILY_CAP_PER_SUBJECT },
+    keys, catalog, pools, ladder, budget, journal, stub, health,
+    caps: () => ({ product: env.DAILY_CAP_PER_PRODUCT, subject: env.DAILY_CAP_PER_SUBJECT }),
     version: env.APP_VERSION,
     logWarn,
   });
@@ -152,10 +162,12 @@ async function main(): Promise<void> {
   // життя сервіс ходив би в мертвий пул за рахунок клієнта — рівно те, від
   // чого мав би рятувати.
   void pools.sweep().then(() => pools.start());
+  if (env.DATABASE_URL) retention.start();
 
   const shutdown = (signal: string) => {
     logInfo('shutdown', { signal });
     pools.stop();
+    retention.stop();
     catalog.stop();
     stubConfig.stop();
     server.close(() => process.exit(0));

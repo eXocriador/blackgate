@@ -1,4 +1,4 @@
-import { defineEnv, str, num, url } from '@exo/kit/env';
+import { defineEnv, str, num, url, bool } from '@exo/kit/env';
 
 /**
  * Середовище читається один раз і валідується на старті — єдине місце в
@@ -34,6 +34,14 @@ export const schema = {
   POOL_COOLDOWN_MS: num({ default: 600_000, min: 1_000 }),
 
   LADDER_RETRIES: num({ default: 2, min: 0, max: 5 }),
+
+  // Журнал запитів (ai_request). Дефолти — налаштування в панелі їх перекривають.
+  // Вміст — повідомлення клієнтів і відповіді моделей; власник просив повний
+  // аудит, тож за замовчуванням пишеться, а строк вмісту — 90 днів.
+  JOURNAL_STORE_CONTENT: bool({ default: true }),
+  JOURNAL_CONTENT_DAYS: num({ default: 90, min: 0 }),
+  // Рядок журналу без вмісту (хто, коли, статус, токени). 0 — без строку.
+  JOURNAL_RETENTION_DAYS: num({ default: 365, min: 0 }),
 
   APP_VERSION: str({ default: 'dev' }),
   SENTRY_DSN: str({ optional: true }),
