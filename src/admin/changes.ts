@@ -95,24 +95,38 @@ export function createChanges(config: ChangesConfig) {
     }
   }
 
+  /**
+   * Налаштування — у канонічному тексті (ключі за абеткою, відступ 2), хоч би
+   * як їх склала форма: інакше порядок ключів ставав би «різницею», а версії
+   * одного й того самого вмісту — різними текстами. YAML лишається як є:
+   * коментарі й порядок у ньому — частина документа.
+   */
+  function normalize(kind: ChangeKind, text: string): string {
+    return kind === 'settings' ? overridesText(parseOverrides(parseJson(text))) : text;
+  }
+
   async function check(kind: ChangeKind, text: string): Promise<CheckResult> {
-    const diff = unifiedDiff(await currentText(kind), text);
+    let doc = text;
     try {
       validate(kind, text);
-      return { ok: true, problems: [], diff, unchanged: diff === '' };
+      doc = normalize(kind, text);
     } catch (err) {
+      const diff = unifiedDiff(await currentText(kind), text);
       return { ok: false, problems: (err as ChangeRejected).problems, diff, unchanged: diff === '' };
     }
+    const diff = unifiedDiff(await currentText(kind), doc);
+    return { ok: true, problems: [], diff, unchanged: diff === '' };
   }
 
   async function apply(
     kind: ChangeKind,
-    text: string,
+    rawText: string,
     actor: string,
     note: string | null,
     restoredFrom: number | null = null,
   ): Promise<{ id: number | null; diff: string }> {
-    validate(kind, text);
+    validate(kind, rawText);
+    const text = normalize(kind, rawText);
     const before = await currentText(kind);
     const diff = unifiedDiff(before, text);
     if (diff === '') return { id: null, diff };

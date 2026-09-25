@@ -1,0 +1,21 @@
+/*
+ * Тема і примітиви — @exo/kit-ui на Tailwind 4 (канон filebrowser). Власних
+ * класів тут майже немає: лише те, що утилітою не виражається.
+ */
+@import "tailwindcss";
+@import "@exo/kit-ui/tokens.css";
+@import "uplot/dist/uPlot.min.css";
+
+/* Моноширинний текст документів і вмісту: реєстр, заглушка, повідомлення. */
+@theme {
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+}
+
+/* Легенда uPlot — у кольорах теми, а не чорним по темному. */
+.uplot .u-legend {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+}
+.uplot .u-legend .u-marker {
+  border-radius: 2px;
+}

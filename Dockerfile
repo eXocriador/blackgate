@@ -18,6 +18,18 @@ RUN npm run build
 # стадії builder).
 RUN npm run typecheck && npm test
 
+# ── панель (SPA) ────────────────────────────────────────────────────────────
+# Окремий пакет у web/ зі своїм локом: React, Tailwind і uPlot не мають
+# потрапляти в node_modules процесу, через який ходять ключі продуктів. Ворота
+# — тут само, у стадії, з якої рантайм бере dist (інакше BuildKit пропустив би
+# її мовчки).
+FROM node:22-bookworm-slim AS web
+WORKDIR /web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ .
+RUN npm run typecheck && npm test && npm run build
+
 # ── лише продові залежності ─────────────────────────────────────────────────
 FROM node:22-bookworm-slim AS prod-deps
 WORKDIR /app
@@ -48,6 +60,8 @@ COPY --from=ghcr.io/amacneil/dbmate:2.35.1 /usr/local/bin/dbmate /usr/local/bin/
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=prod-deps /app/package.json ./package.json
 COPY --from=build /app/dist ./dist
+# Статика панелі: її роздає admin-слухач (ADMIN_WEB_ROOT=/app/web, порт 3001).
+COPY --from=web /web/dist ./web
 # Міграції їдуть у той самий образ, що й код: схема завжди та сама, що й той,
 # хто її читає.
 COPY db ./db
@@ -62,5 +76,6 @@ ARG APP_VERSION=dev
 ENV APP_VERSION=$APP_VERSION
 
 USER node
-EXPOSE 3000
+# 3000 — /v1 для продуктів; 3001 — панель (лише через домен за basic-auth).
+EXPOSE 3000 3001
 CMD ["node", "dist/index.js"]
