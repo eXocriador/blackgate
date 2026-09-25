@@ -60,6 +60,10 @@ Authorization: Bearer <ключ продукту>
 `GET /v1/usage` (скільки цей продукт спалив сьогодні), `/health/live`,
 `/health/ready` (обидва без ключа; див. «Здоров'я» нижче).
 
+Трейси: `traceparent` (W3C) у заголовку і `metadata` в тілі (`session_id`,
+`trace_id`, що завгодно до 4 КБ) лягають у журнал запиту; спан OTLP стає
+дочірнім до спану продукту.
+
 Клієнти: TypeScript — `@exo/kit/ai` у [exo-kit](https://github.com/eXocriador/exo-kit);
 Python — [`clients/python`](clients/python/README.md) у цьому репо (async `httpx`,
 типізовані помилки на кожен рядок таблиці вище).
@@ -137,9 +141,15 @@ is no longer available…» замість відповіді.
 **fail-open** — недоступний Redis не має гасити підтримку. Перевищення
 деградує в **передачу людині**, а не в 402.
 
-## Облік
+## Облік і журнал
 
-Таблиця `ai_call` у спільному Postgres (база `blackgate`), міграції — dbmate.
+Таблиця `ai_call` у спільному Postgres (база `blackgate`), міграції — dbmate —
+рядок на **спробу** драбини. З 2026-09-25 поруч `ai_request` — рядок на
+**кожен** `/v1/complete`, і відмову теж (400, 401, 429 стелі, 503): статус,
+модель, сума токенів, латентність, трейс і — за налаштуванням — **вміст**
+(повідомлення й відповідь). Спроби посилаються на свій запит (`request_ref`).
+Запис після відповіді, не тримає її. Строк: вміст 90 днів (стає `NULL`),
+рядок 365 (`JOURNAL_*` у `.env`, перекриваються в панелі).
 `cost_usd` лишається `NULL`, поки в реєстрі немає `price_*_per_mtok`:
 **вигадана цифра гірша за порожню**, бо за нею ухвалювали б рішення. Токени
 шлюз віддає — перевірено на всіх чотирьох пулах.
@@ -200,13 +210,39 @@ JSON Schema в системний промпт (так робить exopost), о
 Стан пулів заглушки свій на кожен запит: `[stub:429]` не кладе `stub-a`
 наступним запитам.
 
+## Панель
+
+Окремий слухач на **3001** (`ADMIN_PORT`): `/admin/api/*` і SPA з `web/`
+(Vite + React 19 + `@exo/kit-ui`, графіки uPlot). Порт 3000 (`/v1`) без змін.
+Без `ADMIN_HTPASSWD` (htpasswd, apr1 або bcrypt) слухач не піднімається;
+Basic перевіряється в застосунку, хоч би що стояло перед ним, а зміни —
+лише з `X-Requested-With: blackgate-panel` і Origin свого хоста.
+
+Налаштування (стелі — спільні й на продукт; журнал) лежать перекриттям у
+таблиці `setting` поверх `.env`. Кожна зміна налаштувань, реєстру чи заглушки
+з панелі — рядок `config_change` (хто, коли, до/після, різниця) з відкатом.
+
+| змінна | дефолт | що |
+|---|---|---|
+| `ADMIN_PORT` | 3001 | слухач панелі |
+| `ADMIN_HTPASSWD` | — | `user:hash` через кому; порожньо — панелі немає |
+| `ADMIN_WEB_ROOT` | `/app/web` | зібрана SPA |
+| `JOURNAL_STORE_CONTENT` | `true` | писати вміст запитів |
+| `JOURNAL_CONTENT_DAYS` / `JOURNAL_RETENTION_DAYS` | 90 / 365 | строки вмісту й рядка (0 — без строку) |
+| `UPSTREAM_MANAGEMENT_KEY` | — | ключ Management API двигуна під VibeConduit (лише читання акаунтів) |
+| `UPSTREAM_PANEL_URL` | — | посилання на його Management Center |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | приймач OTLP/HTTP; порожньо — експорт вимкнений |
+| `OTEL_EXPORTER_OTLP_HEADERS` | — | `k=v,k2=v2` |
+| `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` | `false` | вміст у спанах (`gen_ai.input/output.messages`) |
+
 ## Розробка
 
 ```bash
 npm ci && npm test && npm run typecheck
+cd web && npm ci && npm test && npm run typecheck && npm run build
 ```
 
-Ворота (`typecheck` + `test`) стоять у стадії `build` образу: на хості вони
+Ворота (`typecheck` + `test`) стоять у стадіях `build` і `web` образу: на хості вони
 йшли б від іншого `node_modules` і від некоміченого дерева.
 
 Деплой, БД, ключі і монітор — у `/srv/products/blackgate/README.md`.

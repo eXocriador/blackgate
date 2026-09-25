@@ -55,6 +55,16 @@ export const schema = {
   UPSTREAM_MANAGEMENT_KEY: str({ optional: true, secret: true }),
   UPSTREAM_PANEL_URL: url({ optional: true, protocols: ['http', 'https'] }),
 
+  // Трейси: OTLP/HTTP (JSON) за конвенціями OpenTelemetry GenAI. Порожній
+  // ендпоїнт — експорт вимкнений (журнал у Постгресі пишеться завжди). Імена —
+  // стандартні змінні OpenTelemetry, щоб приймач налаштовувався як скрізь.
+  OTEL_EXPORTER_OTLP_ENDPOINT: url({ optional: true, protocols: ['http', 'https'] }),
+  OTEL_EXPORTER_OTLP_HEADERS: str({ optional: true, secret: true }),
+  OTEL_SERVICE_NAME: str({ default: 'blackgate' }),
+  // Вміст повідомлень у спанах — лише за опт-іном (і лише коли журнал сам
+  // зберігає вміст): переглядач трейсів — ще одне місце, куди він поїде.
+  OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT: bool({ default: false }),
+
   APP_VERSION: str({ default: 'dev' }),
   SENTRY_DSN: str({ optional: true }),
   LOG_LEVEL: str({ default: 'info' }),

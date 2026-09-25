@@ -25,6 +25,9 @@ import { createQueries } from './admin/queries.js';
 import { createUpstreamAdmin } from './admin/upstream.js';
 import { createAdminServer } from './admin/server.js';
 import { stat } from 'node:fs/promises';
+import { readTrace } from './trace/context.js';
+import { createOtlpExporter, parseHeaders } from './trace/otlp.js';
+import type { Journal } from './journal/journal.js';
 import { parseProductKeys, KeyConfigError } from './http/auth.js';
 import { createHttpServer } from './http/server.js';
 import { loadStub, describeRoutes, StubConfigError } from './stub/config.js';
@@ -126,7 +129,33 @@ async function main(): Promise<void> {
   }
 
   const ledger = createLedger({ db, catalog: () => catalog.current(), logWarn });
-  const journal = createJournal({ db, ledger, storeContent: () => settings.current().journal.storeContent, logWarn });
+  const baseJournal = createJournal({ db, ledger, storeContent: () => settings.current().journal.storeContent, logWarn });
+
+  // OTLP — за змінною, вимкнений за замовчуванням. Спан іде ПІСЛЯ запису журналу:
+  // у ньому id рядка, за яким трейс знаходить повний запис у панелі.
+  const otlp = env.OTEL_EXPORTER_OTLP_ENDPOINT
+    ? createOtlpExporter({
+        endpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT,
+        headers: parseHeaders(env.OTEL_EXPORTER_OTLP_HEADERS),
+        serviceName: env.OTEL_SERVICE_NAME,
+        serviceVersion: env.APP_VERSION,
+        captureContent: env.OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT,
+        logWarn,
+      })
+    : null;
+  logInfo('boot.otlp', { enabled: otlp !== null });
+  const journal: Journal = {
+    async record(entry) {
+      const id = await baseJournal.record(entry);
+      if (otlp) {
+        // «Не зберігати вміст» у панелі діє і на трейси: вміст, якого немає в
+        // нашому журналі, не має жити в чужому переглядачі.
+        const store = settings.current().journal.storeContent;
+        otlp.export(store ? entry : { ...entry, input: null, output: null }, id);
+      }
+      return id;
+    },
+  };
   const retention = createRetention({
     db,
     contentDays: () => settings.current().journal.contentDays,
@@ -174,7 +203,7 @@ async function main(): Promise<void> {
 
   const caps = (product: string) => capsFor(settings.current(), product);
   const server = createHttpServer({
-    keys, catalog, pools, ladder, budget, journal, stub, health, caps,
+    keys, catalog, pools, ladder, budget, journal, stub, health, caps, readTrace,
     version: env.APP_VERSION,
     logWarn,
   });
@@ -231,6 +260,7 @@ async function main(): Promise<void> {
     pools.stop();
     retention.stop();
     settings.stop();
+    void otlp?.stop();
     catalog.stop();
     stubConfig.stop();
     admin?.close();
